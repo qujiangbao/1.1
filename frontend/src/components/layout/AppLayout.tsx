@@ -12,6 +12,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   PlayCircleOutlined,
+  BarChartOutlined,
 } from "@ant-design/icons";
 
 const { Sider, Content, Header } = Layout;
@@ -23,6 +24,7 @@ const menuItems = [
   { key: "/agent/team", icon: <TeamOutlined />, label: "Agent 团队" },
   { key: "/dashboard/investment", icon: <SearchOutlined />, label: "招商驾驶舱" },
   { key: "/dashboard/risk", icon: <AlertOutlined />, label: "风险预警" },
+  { key: "/dashboard/bi", icon: <BarChartOutlined />, label: "BI 驾驶舱" },
 ];
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
