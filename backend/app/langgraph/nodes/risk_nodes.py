@@ -19,6 +19,8 @@ class RiskState(TypedDict):
     risk_features: Optional[Dict]
     risk_score: Optional[float]
     risk_level: Optional[str]
+    risk_events: Optional[List[Dict]]
+    business_status: Optional[Dict]
     explanation: Optional[Dict]
     recommendation: Optional[str]
     report: Optional[Dict]
@@ -46,9 +48,16 @@ def data_request_node(state: RiskState) -> RiskState:
     eid = state["enterprise_id"]
     profile = tg.invoke("RiskAgent", "enterprise_profile_get", {"enterprise_id": eid})
     basic = tg.invoke("RiskAgent", "enterprise_query", {"enterprise_id": eid})
+
+    # P0: 新增风险事件 + 经营状态
+    risk_events = tg.invoke("RiskAgent", "enterprise_risk_events", {"enterprise_id": eid, "limit": 20})
+    biz_status = tg.invoke("RiskAgent", "enterprise_business_status", {"enterprise_id": eid})
+
     state["basic_info"] = basic.data or {}
     state["profile_data"] = profile.data or {}
-    state["data_sources"] = ["enterprise", "enterprise_profile"]
+    state["risk_events"] = risk_events.data.get("events", []) if risk_events.status == "success" else []
+    state["business_status"] = biz_status.data if biz_status.status == "success" else {}
+    state["data_sources"] = ["enterprise", "enterprise_profile", "enterprise_risk_events", "enterprise_business_status"]
     state["status"] = "extracting"
     return state
 
