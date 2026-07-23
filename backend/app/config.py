@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     admin_username: str = "admin"
     admin_password: str = "admin"
 
+    # Enterprise Data (P0)
+    enterprise_data_source: str = "mock"
+    tianyancha_api_key: str = ""
+    tianyancha_base_url: str = "https://api.tianyancha.com"
+    qichacha_app_key: str = ""
+    qichacha_secret_key: str = ""
+    enterprise_cache_ttl: int = 3600
+
     # App
     log_level: str = "INFO"
     cors_origins: list[str] = ["http://localhost:3000"]

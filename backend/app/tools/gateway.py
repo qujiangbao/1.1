@@ -31,7 +31,8 @@ class ToolGateway:
         "InvestmentAgent": ["enterprise_search", "enterprise_profile_get",
                            "enterprise_query", "investment_scoring"],
         "RiskAgent": ["enterprise_query", "enterprise_profile_get",
-                     "risk_scoring", "risk_history"],
+                     "risk_scoring", "risk_history",
+                     "enterprise_risk_events", "enterprise_business_status"],
         "PolicyAgent": ["policy_vector_search", "policy_metadata_search",
                        "policy_query", "enterprise_profile_get"],
         "IndustryAgent": ["industry_query", "industry_vector_search",
@@ -47,12 +48,22 @@ class ToolGateway:
         self._register_builtin_tools()
 
     def _register_builtin_tools(self):
-        """注册内置工具"""
+        """注册内置工具
+
+        P0: enterprise_search / enterprise_profile_get / enterprise_query /
+            enterprise_risk_events / enterprise_business_status
+            已升级为 EnterpriseDataTool → DataAdapter → 外部 API。
+            mock 方法保留在 adapters/mock.py。
+        """
         self._tools = {
-            "enterprise_search":       self._mock_enterprise_search,
-            "enterprise_profile_get":  self._mock_enterprise_profile,
-            "enterprise_query":        self._mock_enterprise_query,
-            "investment_scoring":      self._mock_scoring,
+            # === P0: EnterpriseDataTool (真实数据 / MockAdapter) ===
+            "enterprise_search":       self._enterprise_search,
+            "enterprise_profile_get":  self._enterprise_profile_get,
+            "enterprise_query":        self._enterprise_query,
+            "enterprise_risk_events":  self._enterprise_risk_events,
+            "enterprise_business_status": self._enterprise_business_status,
+            "investment_scoring":      self._enterprise_scoring,
+            # === 其他工具（暂保持 mock） ===
             "risk_scoring":            self._mock("risk_scoring"),
             "risk_history":            self._mock("risk_history"),
             "policy_vector_search":    self._mock_policy_search,
@@ -65,6 +76,85 @@ class ToolGateway:
             "dashboard_query":         self._mock("dashboard_query"),
             "metric_query":            self._mock("metric_query"),
         }
+
+    # ═══ P0: EnterpriseDataTool 委托方法 ═══
+
+    @staticmethod
+    def _enterprise_profile_get(params: Dict) -> Dict:
+        """企业画像 → EnterpriseDataTool"""
+        from app.tools.enterprise_data import get_enterprise_data_tool
+        etd = get_enterprise_data_tool()
+        eid = params.get("enterprise_id", "")
+        result = etd.get_profile_sync(eid)
+        return {"status": result.get("status", "success"),
+                "tool": "enterprise_profile_get", "params": params,
+                "result": result.get("data", result)}
+
+    @staticmethod
+    def _enterprise_search(params: Dict) -> Dict:
+        """企业搜索 → EnterpriseDataTool"""
+        from app.tools.enterprise_data import get_enterprise_data_tool
+        etd = get_enterprise_data_tool()
+        query = str(params.get("query", params.get("industry", "")))
+        result = etd.search_enterprises_sync(query,
+            industry=params.get("industry"),
+            location=params.get("location"),
+            limit=params.get("limit", 20))
+        return {"status": result.get("status", "success"),
+                "tool": "enterprise_search", "params": params,
+                "result": {"enterprises": result.get("enterprises", []),
+                           "total": result.get("total", 0)}}
+
+    @staticmethod
+    def _enterprise_query(params: Dict) -> Dict:
+        """企业基础查询 → EnterpriseDataTool"""
+        from app.tools.enterprise_data import get_enterprise_data_tool
+        etd = get_enterprise_data_tool()
+        eid = params.get("enterprise_id", "")
+        result = etd.get_profile_sync(eid)
+        profile = result.get("data", {})
+        return {"status": "success", "tool": "enterprise_query", "params": params,
+                "result": {"name": profile.get("name", eid),
+                           "industry": profile.get("industry", ""),
+                           "registered_capital": profile.get("registered_capital", "")}}
+
+    @staticmethod
+    def _enterprise_risk_events(params: Dict) -> Dict:
+        """风险事件列表 → EnterpriseDataTool"""
+        from app.tools.enterprise_data import get_enterprise_data_tool
+        etd = get_enterprise_data_tool()
+        eid = params.get("enterprise_id", "")
+        result = etd.get_risk_events_sync(eid,
+            event_type=params.get("event_type"),
+            limit=params.get("limit", 20))
+        return {"status": result.get("status", "success"),
+                "tool": "enterprise_risk_events", "params": params,
+                "result": {"events": result.get("events", []),
+                           "total": result.get("total", 0)}}
+
+    @staticmethod
+    def _enterprise_business_status(params: Dict) -> Dict:
+        """经营状态 → EnterpriseDataTool"""
+        from app.tools.enterprise_data import get_enterprise_data_tool
+        etd = get_enterprise_data_tool()
+        eid = params.get("enterprise_id", "")
+        result = etd.get_business_status_sync(eid)
+        return {"status": result.get("status", "success"),
+                "tool": "enterprise_business_status", "params": params,
+                "result": result.get("data", result)}
+
+    @staticmethod
+    def _enterprise_scoring(params: Dict) -> Dict:
+        """投资评分 → EnterpriseDataTool"""
+        from app.tools.enterprise_data import get_enterprise_data_tool
+        etd = get_enterprise_data_tool()
+        eid = str(params.get("enterprise_id", ""))
+        result = etd.compute_scoring_sync(eid)
+        return {"status": result.get("status", "success"),
+                "tool": "investment_scoring", "params": params,
+                "result": result}
+
+    # ═══ 原始 Mock 方法（保留兼容，迁移到 adapters/mock.py） ═══
 
     def _mock(self, name: str):
         """临时 mock 工具（数据库就绪后替换为真实实现）"""
