@@ -17,6 +17,7 @@ class PolicyState(TypedDict):
     enterprise_profile: Optional[Dict]
     raw_chunks: Optional[List[Dict]]
     filtered_chunks: Optional[List[Dict]]
+    search_mode: Optional[str]
     matched_policies: Optional[List[Dict]]
     report: Optional[Dict]
     status: str
@@ -48,32 +49,36 @@ def enterprise_loader_node(state: PolicyState) -> PolicyState:
 
 
 def vector_search_node(state: PolicyState) -> PolicyState:
+    """向量/混合检索 — P1: 通过 KnowledgeTool (MockAdapter 或 pgvector)"""
     q = state["query"]
+    filters = {}
+
     if state.get("enterprise_profile"):
         ind = state["enterprise_profile"].get("industry", "")
-        q = f"{ind} {q}" if ind else q
-    r = tg.invoke("PolicyAgent", "policy_vector_search", {"query": q, "top_k": 10})
+        loc = state["enterprise_profile"].get("location", "")
+        if ind:
+            q = f"{ind} {q}" if ind else q
+            filters["industry"] = ind
+        if loc:
+            filters["region"] = loc
+
+    # P1: 使用 policy_hybrid_search (KnowledgeTool → PolicyRetriever)
+    r = tg.invoke("PolicyAgent", "policy_hybrid_search", {
+        "query": q, "top_k": 10, "filters": filters,
+    })
     state["raw_chunks"] = r.data.get("chunks", []) if r.status == "success" else []
-    state["tools_used"].append("policy_vector_search")
-    state["data_sources"].append("policy_embedding")
+    state["search_mode"] = r.data.get("mode", "mock") if r.status == "success" else "mock"
+    state["tools_used"].append("policy_hybrid_search")
+    state["data_sources"].append(f"policy_rag_{state['search_mode']}")
     state["status"] = "filtering"
     return state
 
 
 def metadata_filter_node(state: PolicyState) -> PolicyState:
+    """P1: 内存过滤 — hybrid_search 结果已包含过滤，只需排序去重"""
     chunks = state.get("raw_chunks", [])
-    if state.get("enterprise_profile"):
-        region = state["enterprise_profile"].get("location", "")
-        r = tg.invoke("PolicyAgent", "policy_metadata_search", {
-            "region": "guangzhou" if "广州" in str(region) else None,
-        })
-        valid_ids = {p.get("policy_id") for p in (r.data.get("policies", []) if r.status == "success" else [])}
-        if valid_ids:
-            chunks = [c for c in chunks if c.get("policy_id") in valid_ids]
-    chunks.sort(key=lambda c: c.get("similarity", 0), reverse=True)
+    chunks.sort(key=lambda c: c.get("score", 0), reverse=True)
     state["filtered_chunks"] = chunks[:10]
-    state["tools_used"].append("policy_metadata_search")
-    state["data_sources"].append("policy")
     state["status"] = "matching"
     return state
 
@@ -83,10 +88,11 @@ def policy_matcher_node(state: PolicyState) -> PolicyState:
     state["matched_policies"] = [
         {
             "policy_id": c.get("policy_id", ""),
-            "title": c.get("title", ""),
+            "title": c.get("metadata", {}).get("title", c.get("title", "")),
             "content_snippet": str(c.get("content", ""))[:200],
-            "level": c.get("level", ""),
-            "match_score": round(c.get("similarity", 0.7) * 100),
+            "level": c.get("metadata", {}).get("level", c.get("level", "")),
+            "department": c.get("metadata", {}).get("department", ""),
+            "match_score": round(c.get("score", 0.7) * 100),
         }
         for c in chunks
     ]

@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     qichacha_secret_key: str = ""
     enterprise_cache_ttl: int = 3600
 
+    # Policy RAG (P1)
+    policy_rag_mode: str = "mock"
+    policy_embedding_provider: str = "deepseek"
+    policy_embedding_model: str = "text-embedding-3-small"
+    policy_embedding_dimensions: int = 1536
+
     # App
     log_level: str = "INFO"
     cors_origins: list[str] = ["http://localhost:3000"]
