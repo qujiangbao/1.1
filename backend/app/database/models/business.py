@@ -70,6 +70,40 @@ class Policy(Base):
     source = Column(String(500))
 
 
+class PolicyDocument(Base):
+    """P1: 原始政策文档"""
+    __tablename__ = "policy_documents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    policy_id = Column(String(50), ForeignKey("policy.policy_id"), nullable=True)
+    filename = Column(String(500), nullable=False)
+    file_format = Column(String(20))
+    file_hash = Column(String(64))
+    file_size = Column(Integer)
+    page_count = Column(Integer)
+    raw_text = Column(Text)
+    parse_status = Column(String(20), default="pending")
+    parse_error = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PolicyChunk(Base):
+    """P1: 政策分块 + pgvector 向量"""
+    __tablename__ = "policy_chunks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chunk_id = Column(String(100), unique=True, nullable=False)
+    policy_id = Column(String(50), ForeignKey("policy.policy_id"), nullable=True)
+    document_id = Column(Integer, ForeignKey("policy_documents.id"), nullable=True)
+    chunk_index = Column(Integer, nullable=False)
+    content = Column(Text, nullable=False)
+    content_hash = Column(String(64))
+    token_count = Column(Integer)
+    metadata_ = Column("metadata", JSONB, default={})
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Risk(Base):
     __tablename__ = "risk"
 

@@ -34,7 +34,8 @@ class ToolGateway:
                      "risk_scoring", "risk_history",
                      "enterprise_risk_events", "enterprise_business_status"],
         "PolicyAgent": ["policy_vector_search", "policy_metadata_search",
-                       "policy_query", "enterprise_profile_get"],
+                       "policy_query", "policy_hybrid_search",
+                       "enterprise_profile_get"],
         "IndustryAgent": ["industry_query", "industry_vector_search",
                          "knowledge_graph_query"],
         "EnterpriseServiceAgent": ["enterprise_query", "enterprise_profile_get",
@@ -66,9 +67,11 @@ class ToolGateway:
             # === 其他工具（暂保持 mock） ===
             "risk_scoring":            self._mock("risk_scoring"),
             "risk_history":            self._mock("risk_history"),
-            "policy_vector_search":    self._mock_policy_search,
-            "policy_metadata_search":  self._mock_policy_search,
-            "policy_query":            self._mock_policy_search,
+            # === P1: KnowledgeTool 替换 Mock 政策搜索 ===
+            "policy_hybrid_search":    self._policy_hybrid_search,
+            "policy_vector_search":    self._policy_hybrid_search,  # 兼容旧名
+            "policy_metadata_search":  self._policy_hybrid_search,  # 兼容旧名
+            "policy_query":            self._policy_hybrid_search,  # 兼容旧名
             "industry_query":          self._mock("industry_query"),
             "industry_vector_search":  self._mock("industry_vector_search"),
             "knowledge_graph_query":   self._mock("knowledge_graph_query"),
@@ -153,6 +156,15 @@ class ToolGateway:
         return {"status": result.get("status", "success"),
                 "tool": "investment_scoring", "params": params,
                 "result": result}
+
+    # ═══ P1: KnowledgeTool 委托方法 ═══
+
+    @staticmethod
+    def _policy_hybrid_search(params: Dict) -> Dict:
+        """政策混合检索 → KnowledgeTool"""
+        from app.tools.knowledge_tool import get_knowledge_tool
+        kt = get_knowledge_tool()
+        return kt.policy_hybrid_search_sync(params)
 
     # ═══ 原始 Mock 方法（保留兼容，迁移到 adapters/mock.py） ═══
 

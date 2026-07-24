@@ -1,5 +1,7 @@
-"""Business API — 企业数据查询 + 经营状态 + 风险事件 (P0)"""
+"""Business API — 企业数据 + 政策 RAG (P0+P1)"""
 from fastapi import APIRouter, Query
+from pydantic import BaseModel, Field
+from typing import Optional
 from app.tools.enterprise_data import get_enterprise_data_tool
 
 router = APIRouter()
@@ -84,5 +86,96 @@ async def get_data_source_info():
         "data": {
             "source_name": etd.source_name,
             "healthy": healthy,
+        }
+    }
+
+
+# ═══ P1: Policy RAG API ═══
+
+class PolicySearchRequest(BaseModel):
+    query: str
+    enterprise_id: Optional[str] = None
+    filters: Optional[dict] = None
+    top_k: int = Field(default=10, ge=1, le=50)
+
+
+class PolicyMatchRequest(BaseModel):
+    enterprise_id: str
+    top_k: int = Field(default=10, ge=1, le=50)
+
+
+@router.post("/policy/search")
+async def policy_search(body: PolicySearchRequest):
+    """政策智能检索"""
+    from app.tools.knowledge_tool import get_knowledge_tool
+    kt = get_knowledge_tool()
+    result = kt.policy_hybrid_search_sync({
+        "query": body.query,
+        "top_k": body.top_k,
+        "filters": body.filters,
+    })
+    return {"success": True, "data": result.get("result", result)}
+
+
+@router.post("/policy/match")
+async def policy_match(body: PolicyMatchRequest):
+    """企业政策自动匹配 — 基于企业画像智能搜索适用政策"""
+    from app.tools.knowledge_tool import get_knowledge_tool
+    etd = get_enterprise_data_tool()
+
+    # 1. 获取企业画像
+    profile = await etd.get_profile(body.enterprise_id)
+
+    # 2. 构建搜索查询
+    query = f"{profile.industry or ''} {profile.location or ''}"
+    filters = {}
+    if profile.industry:
+        filters["industry"] = profile.industry
+    if profile.location:
+        filters["region"] = profile.location
+
+    # 3. 混合检索
+    kt = get_knowledge_tool()
+    result = kt.policy_hybrid_search_sync({
+        "query": query, "top_k": body.top_k, "filters": filters,
+    })
+
+    chunks = result.get("result", {}).get("chunks", [])
+    return {
+        "success": True,
+        "data": {
+            "enterprise_id": body.enterprise_id,
+            "enterprise_name": profile.name,
+            "industry": profile.industry,
+            "location": profile.location,
+            "matched_policies": chunks,
+            "total_matched": len(chunks),
+        }
+    }
+
+
+@router.get("/policy/rag-status")
+async def get_policy_rag_status():
+    """RAG 系统状态"""
+    from app.config import get_settings
+    s = get_settings()
+    mode = s.policy_rag_mode
+
+    total_docs = 0
+    total_chunks = 0
+    if mode == "pgvector":
+        from app.services.vector_store import VectorStore
+        vs = VectorStore()
+        total_chunks = await vs.count_chunks()
+
+    return {
+        "success": True,
+        "data": {
+            "mode": mode,
+            "total_documents": total_docs,
+            "total_chunks": total_chunks,
+            "embedding_model": s.policy_embedding_model,
+            "embedding_dimensions": s.policy_embedding_dimensions,
+            "healthy": True,
         }
     }
