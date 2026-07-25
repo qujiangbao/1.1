@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     policy_embedding_model: str = "text-embedding-3-small"
     policy_embedding_dimensions: int = 1536
 
+    # Streaming (P3)
+    streaming_enabled: bool = False       # 默认关闭，保持 v1.2 兼容
+    streaming_heartbeat_seconds: int = 15  # SSE 心跳间隔
+
     # App
     log_level: str = "INFO"
     cors_origins: list[str] = ["http://localhost:3000"]

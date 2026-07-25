@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Input, Button, Card, Tag, Space, Timeline, Badge, Typography } from "antd";
+import { Input, Button, Card, Tag, Space, Badge, Typography } from "antd";
 import {
   SendOutlined,
   RobotOutlined,
@@ -11,7 +11,6 @@ import {
   ThunderboltOutlined,
   ClockCircleOutlined,
   NodeIndexOutlined,
-  BarChartOutlined,
 } from "@ant-design/icons";
 import ReactMarkdown from "react-markdown";
 import { apiFetch } from "@/api/fetch";
@@ -32,7 +31,7 @@ interface AgentStatus {
   name: string;
   display: string;
   icon: string;
-  status: "pending" | "running" | "completed";
+  status: "pending" | "running" | "completed" | "failed";
   action?: string;
   duration?: string;
 }
@@ -81,34 +80,13 @@ export default function AgentChatPage() {
     setInput("");
     setLoading(true);
 
-    // Phase 1: Supervisor analyzing
-    const phase1Agents: AgentStatus[] = DEFAULT_AGENTS.map((a) => ({
-      ...a,
-      status: "pending",
-      action: a.name === "Supervisor" ? "分析中..." : "等待调度",
-    }));
-    phase1Agents[0].status = "running";
-    setAgents(phase1Agents);
-
-    await new Promise((r) => setTimeout(r, 800));
-
-    // Phase 2: Supervisor planning → agents activated
-    setAgents((prev) =>
-      prev.map((a, i) => {
-        if (i === 0) return { ...a, status: "completed", action: "✅ 已拆解3个子任务", duration: "0.5s" };
-        return { ...a, status: "running", action: "执行中..." };
-      })
-    );
-
-    await new Promise((r) => setTimeout(r, 600));
-
-    // Phase 3: Agents completing
-    setAgents((prev) =>
-      prev.map((a) =>
-        a.name !== "Supervisor"
-          ? { ...a, status: "completed", action: "✅ 完成", duration: "~2s" }
-          : a
-      )
+    // P3: 重置 Agent 面板为初始状态
+    setAgents(
+      DEFAULT_AGENTS.map((a) => ({
+        ...a,
+        status: "pending" as const,
+        action: a.name === "Supervisor" ? "分析中..." : "等待调度",
+      }))
     );
 
     try {
@@ -119,10 +97,106 @@ export default function AgentChatPage() {
         body: JSON.stringify({ message: query }),
       });
       const data = await res.json();
-      const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
 
-      // Update agent panel with real data
-      const usedAgents = data.agents_used || [];
+      // P3: streaming 模式 — 通过 SSE 接收实时事件
+      if (data.stream_url) {
+        const es = new EventSource(`${API}${data.stream_url}`);
+
+        es.addEventListener("node_complete", (e) => {
+          const parsed = JSON.parse(e.data);
+          const node = parsed.payload?.node || "";
+          if (node === "intent_recognition") {
+            setAgents((prev) =>
+              prev.map((a) =>
+                a.name === "Supervisor"
+                  ? { ...a, status: "running" as const, action: "意图识别完成" }
+                  : a
+              )
+            );
+          } else if (node === "task_planner") {
+            setAgents((prev) =>
+              prev.map((a) =>
+                a.name === "Supervisor"
+                  ? { ...a, status: "completed" as const, action: "✅ 任务规划完成", duration: "0.5s" }
+                  : { ...a, status: "running" as const, action: "等待调度" }
+              )
+            );
+          }
+        });
+
+        es.addEventListener("agent_start", (e) => {
+          const parsed = JSON.parse(e.data);
+          const agent = parsed.payload?.agent || "";
+          setAgents((prev) =>
+            prev.map((a) =>
+              a.name === agent
+                ? { ...a, status: "running" as const, action: "执行中..." }
+                : a
+            )
+          );
+        });
+
+        es.addEventListener("agent_done", (e) => {
+          const parsed = JSON.parse(e.data);
+          const agent = parsed.payload?.agent || "";
+          const summary = parsed.payload?.summary || "";
+          const ms = parsed.payload?.execution_time_ms || 0;
+          setAgents((prev) =>
+            prev.map((a) =>
+              a.name === agent
+                ? {
+                    ...a,
+                    status: "completed" as const,
+                    action: summary.slice(0, 50) || "✅ 完成",
+                    duration: `${(ms / 1000).toFixed(1)}s`,
+                  }
+                : a
+            )
+          );
+        });
+
+        es.addEventListener("agent_error", (e) => {
+          const parsed = JSON.parse(e.data);
+          const agent = parsed.payload?.agent || "";
+          setAgents((prev) =>
+            prev.map((a) =>
+              a.name === agent
+                ? { ...a, status: "failed" as const, action: "❌ 执行失败" }
+                : a
+            )
+          );
+        });
+
+        es.addEventListener("done", (e) => {
+          const parsed = JSON.parse(e.data);
+          const finalResp = parsed.payload?.final_response || "";
+          const usedAgents: string[] = parsed.payload?.agents_used || [];
+          const tId = parsed.payload?.task_id || data.task_id;
+
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              content: finalResp,
+              agents: usedAgents,
+              taskId: tId,
+            },
+          ]);
+          setLoading(false);
+          es.close();
+        });
+
+        es.onerror = () => {
+          setLoading(false);
+          es.close();
+        };
+        return;
+      }
+
+      // === v1.2 兼容: 同步模式 (streaming disabled) ===
+      const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+      const usedAgents: string[] = data.agents_used || [];
+
       setAgents((prev) =>
         prev.map((a) => {
           if (a.name === "Supervisor") {
@@ -158,7 +232,7 @@ export default function AgentChatPage() {
       ]);
       setAgents(DEFAULT_AGENTS);
     } finally {
-      setLoading(false);
+      if (loading) setLoading(false);
     }
   }, [input, loading]);
 
@@ -293,7 +367,7 @@ export default function AgentChatPage() {
         </div>
       </div>
 
-      {/* Right: Multi-Agent Collaboration Panel — always visible */}
+      {/* Right: Multi-Agent Collaboration Panel */}
       <div
         style={{
           width: 280,
@@ -337,9 +411,10 @@ export default function AgentChatPage() {
         </div>
 
         <div style={{ flex: 1, overflow: "auto", padding: 12 }}>
-          {(agents.length > 0 ? agents : DEFAULT_AGENTS).map((a, i) => {
+          {(agents.length > 0 ? agents : DEFAULT_AGENTS).map((a) => {
             const isRunning = a.status === "running";
             const isCompleted = a.status === "completed";
+            const isFailed = a.status === "failed";
             return (
               <div
                 key={a.name}
@@ -351,9 +426,11 @@ export default function AgentChatPage() {
                     ? "#e6f7ff"
                     : isCompleted
                     ? "#f6ffed"
+                    : isFailed
+                    ? "#fff2f0"
                     : "#fff",
                   border: `1px solid ${
-                    isRunning ? "#91caff" : isCompleted ? "#b7eb8f" : "#f0f0f0"
+                    isRunning ? "#91caff" : isCompleted ? "#b7eb8f" : isFailed ? "#ffccc7" : "#f0f0f0"
                   }`,
                   transition: "all 0.3s",
                 }}
@@ -369,6 +446,8 @@ export default function AgentChatPage() {
                       <LoadingOutlined style={{ color: "#1677ff" }} spin />
                     ) : isCompleted ? (
                       <CheckCircleOutlined style={{ color: "#52c41a" }} />
+                    ) : isFailed ? (
+                      <ClockCircleOutlined style={{ color: "#ff4d4f" }} />
                     ) : (
                       <ClockCircleOutlined style={{ color: "#d9d9d9" }} />
                     )}
@@ -378,7 +457,7 @@ export default function AgentChatPage() {
                   <div
                     style={{
                       fontSize: 11,
-                      color: isCompleted ? "#52c41a" : isRunning ? "#1677ff" : "#999",
+                      color: isCompleted ? "#52c41a" : isFailed ? "#ff4d4f" : isRunning ? "#1677ff" : "#999",
                       marginTop: 4,
                       paddingLeft: 26,
                     }}
@@ -394,7 +473,7 @@ export default function AgentChatPage() {
           })}
         </div>
 
-        {/* Summary footer with call chain */}
+        {/* Summary footer */}
         {!loading && agents.some((a) => a.status === "completed") && (
           <div
             style={{
