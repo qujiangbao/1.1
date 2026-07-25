@@ -179,3 +179,29 @@ async def get_policy_rag_status():
             "healthy": True,
         }
     }
+
+
+# ═══ P8: Compatibility endpoints for frontend ═══
+
+@router.post("/investment/search")
+async def investment_search(body: dict):
+    """P8: 兼容 POST /investment/search → 委托 EnterpriseDataTool"""
+    from app.tools.enterprise_data import get_enterprise_data_tool
+    etd = get_enterprise_data_tool()
+    query = body.get("industry", body.get("query", ""))
+    result = etd.search_enterprises_sync(query, limit=body.get("limit", 20))
+    enterprises = result.get("enterprises", [])
+    return {
+        "success": True,
+        "data": {
+            "enterprises": enterprises,
+            "total": len(enterprises),
+            "data_source": "mock",
+        }
+    }
+
+
+@router.get("/investment/profile/{enterprise_id}")
+async def investment_profile(enterprise_id: str):
+    """P8: 兼容 GET /investment/profile/{id} → /enterprise/{id}/profile"""
+    return await get_enterprise_profile(enterprise_id)

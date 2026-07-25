@@ -47,7 +47,7 @@ async def agent_chat(request: ChatRequest):
         "status": "idle",
         "trace_id": task_id,  # P3: trace_id = task_id (SSE 订阅 key)
     }
-    config = {"configurable": {"thread_id": conversation_id}}
+    config = {"configurable": {"thread_id": task_id}}  # P8: thread_id = task_id (not conversation_id)
 
     from app.config import get_settings
     settings = get_settings()

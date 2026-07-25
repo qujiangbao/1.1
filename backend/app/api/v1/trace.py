@@ -1,5 +1,5 @@
 """Trace API — 从 LangGraph Checkpointer 检索真实执行链路 (P2: async graph)"""
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from app.schemas.agent import TraceResponse
 from app.langgraph.graph import get_supervisor_graph
 import logging
@@ -12,13 +12,12 @@ router = APIRouter()
 async def get_trace(task_id: str):
     """从 LangGraph checkpointer 检索真实 trace_steps 和 task_plan"""
     try:
-        # P2: async initialization
         graph = await get_supervisor_graph()
         config = {"configurable": {"thread_id": task_id}}
         state = graph.get_state(config)
 
         if state is None or not state.values:
-            return _fallback_trace(task_id, "no_state_found")
+            raise HTTPException(status_code=404, detail="Task not found or trace not yet generated")
 
         sv = state.values
         trace_steps = sv.get("trace_steps", [])
@@ -82,7 +81,7 @@ async def get_trace(task_id: str):
 
     except Exception as e:
         logger.warning(f"Trace retrieval failed for {task_id}: {e}")
-        return _fallback_trace(task_id, str(e))
+        raise HTTPException(status_code=503, detail=f"Trace unavailable: {str(e)}")
 
 
 def _fallback_trace(task_id: str, reason: str) -> TraceResponse:
