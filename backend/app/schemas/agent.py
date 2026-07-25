@@ -84,6 +84,17 @@ class TraceResponse(BaseModel):
 
 
 # === Dashboard ===
+# === P2: Checkpoint ===
+class CheckpointStatus(BaseModel):
+    thread_id: str
+    status: str  # idle / running / completed / failed / not_found
+    current_node: Optional[str] = None
+    completed_nodes: int = 0
+    total_nodes: int = 7
+    task_plan: List[Dict] = Field(default_factory=list)
+    last_checkpoint_at: Optional[str] = None
+
+
 class DashboardOverview(BaseModel):
     park_overview: Dict[str, Any]
     investment: Dict[str, Any]

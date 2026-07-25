@@ -1,8 +1,5 @@
-"""Supervisor LangGraph — 核心编排图"""
-import time
+"""Supervisor LangGraph — 核心编排图 (P2: AsyncPostgresSaver)"""
 import logging
-from uuid import uuid4
-from datetime import datetime
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -79,14 +76,15 @@ def router(state: SupervisorState) -> str:
 
 def needs_approval(state: SupervisorState) -> str:
     """检查是否需要人工审批"""
-    # MVP 阶段不启用审批
     return "finalize_response"
 
 
-def build_supervisor_graph() -> StateGraph:
+def _build_workflow() -> StateGraph:
+    """构建 Supervisor workflow（不含 checkpointer）"""
     from app.langgraph.nodes.supervisor_nodes import (
         user_input_node, intent_recognition_node, task_planner_node,
-        agent_router_node, result_validator_node, result_aggregator_node, final_response_node,
+        agent_router_node, result_validator_node, result_aggregator_node,
+        final_response_node,
     )
 
     workflow = StateGraph(SupervisorState)
@@ -102,12 +100,10 @@ def build_supervisor_graph() -> StateGraph:
 
     workflow.set_entry_point("user_input")
 
-    # 标准流程
     workflow.add_edge("user_input", "intent_recognition")
     workflow.add_edge("intent_recognition", "task_planner")
     workflow.add_edge("task_planner", "agent_router")
 
-    # 条件：Agent 执行后去哪
     workflow.add_conditional_edges("agent_router", router, {
         "agent_router": "agent_router",
         "result_validator": "result_validator",
@@ -122,15 +118,48 @@ def build_supervisor_graph() -> StateGraph:
     })
     workflow.add_edge("finalize_response", END)
 
-    return workflow.compile(checkpointer=MemorySaver())
+    return workflow
 
 
-# 全局单例
+# === 全局单例 (P2: 懒初始化 + AsyncPostgresSaver) ===
 _supervisor_graph = None
+_checkpointer = None
+_setup_done = False
 
 
-def get_supervisor_graph() -> StateGraph:
-    global _supervisor_graph
-    if _supervisor_graph is None:
-        _supervisor_graph = build_supervisor_graph()
+async def get_supervisor_graph() -> StateGraph:
+    """获取编译后的 Supervisor graph（异步初始化 checkpointer）
+
+    DATABASE_ENABLED=true  → AsyncPostgresSaver (PostgreSQL)
+    DATABASE_ENABLED=false → MemorySaver (v1.1 行为, 100% 兼容)
+    PG 连接失败             → 降级 MemorySaver + ERROR log
+    """
+    global _supervisor_graph, _checkpointer, _setup_done
+
+    if _supervisor_graph is not None:
+        return _supervisor_graph
+
+    from app.config import get_settings
+    settings = get_settings()
+
+    if settings.database_enabled:
+        try:
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+            _checkpointer = AsyncPostgresSaver.from_conn_string(settings.database_url)
+            if not _setup_done:
+                await _checkpointer.setup()
+                _setup_done = True
+            logger.info("Checkpointer: AsyncPostgresSaver connected to PostgreSQL")
+        except Exception as e:
+            logger.error(
+                "Failed to init Postgres checkpointer: %s, "
+                "falling back to MemorySaver", e
+            )
+            _checkpointer = MemorySaver()
+    else:
+        _checkpointer = MemorySaver()
+        logger.info("Checkpointer: MemorySaver (in-memory, DATABASE_ENABLED=false)")
+
+    workflow = _build_workflow()
+    _supervisor_graph = workflow.compile(checkpointer=_checkpointer)
     return _supervisor_graph
