@@ -217,11 +217,20 @@ def _keyword_intent_fallback(query: str) -> dict:
 # ==================== Node 3: Task Planner ====================
 def task_planner_node(state: SupervisorState) -> SupervisorState:
     intents = state.get("intents", [])
+    user_role = str(state.get("user_role", "park_manager"))
     task_plan: list[TaskNode] = []
+
+    # P4: ROLE_AGENT_WHITELIST — 角色过滤可调用的 Agent
+    from app.core.permissions import ROLE_AGENT_WHITELIST
+    allowed_agents = ROLE_AGENT_WHITELIST.get(user_role, ["*"])
 
     for i, intent in enumerate(intents):
         agent = INTENT_ROUTING.get(intent)
         if not agent:
+            continue
+        # P4: 跳过无权限的 Agent
+        if "*" not in allowed_agents and agent not in allowed_agents:
+            logger.info("[P4] Task planner: skipping %s (role=%s not permitted)", agent, user_role)
             continue
         task: TaskNode = {
             "task_id": f"{state['trace_id']}-{i}",
