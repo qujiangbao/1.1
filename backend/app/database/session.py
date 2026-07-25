@@ -41,7 +41,10 @@ def _run_migrations():
     alembic_cfg.set_main_option("script_location", migrations_path)
 
     try:
-        command.upgrade(alembic_cfg, "head")
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(command.upgrade, alembic_cfg, "head")
+            future.result(timeout=60)
     except Exception:
         pass  # Allow startup without DB (demo mode)
 
