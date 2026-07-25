@@ -1,55 +1,57 @@
-# Industrial Park Agent Competition Gold v1.1
+# 广州产业AI运营官 v1.2
 
-广州产业 AI 运营官的可运行工程版：Next.js 15 前端、FastAPI 后端、LangGraph Supervisor、6 个业务 Agent、Tool Gateway，以及 PostgreSQL/pgvector 与 Redis 的容器编排。
+> **Industrial Park Agent** — 12-Agent Multi-Agent AI System for Industrial Park Operations  
+> 2026 Super Agent 大赛 · Gold Release Candidate
 
-## 一键启动
-
-```bash
-cp .env.example .env
-docker compose up --build
-```
-
-启动后访问：
-
-- 前端：http://localhost:3000
-- API：http://localhost:8000/docs
-- 健康检查：http://localhost:8000/api/v1/health
-
-不配置模型密钥时，系统使用确定性的本地兜底逻辑，完整 Demo 仍可运行。配置 OpenAI 或 DeepSeek 密钥后，Supervisor 会使用模型完成意图识别与最终报告生成。
-
-## 本地开发
-
-后端：
+## Quick Start
 
 ```bash
-cd backend
-python -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/uvicorn app.main:app --reload
+git clone git@github.com:qujiangbao/1.1.git
+cd 1.1
+git checkout feature/production-upgrade-v1.2
+cp .env.production .env
+# Edit .env: add DEEPSEEK_API_KEY
+./deploy.sh build
 ```
 
-前端：
+## Architecture
 
-```bash
-cd frontend
-npm ci
-npm run dev
+```
+User → Nginx :80 → Next.js :3000 + FastAPI :8000
+                        ↓
+            Supervisor (LangGraph StateGraph)
+           ↙    ↓    ↓    ↓    ↓    ↘
+    Industry  Investment  Risk  Policy  Service  BI
+           ↘    ↓    ↓    ↓    ↓    ↙
+              ToolGateway (18 tools)
+                    ↓
+         PostgreSQL/pgvector + Redis
 ```
 
-## 验证
+## Features (P0-P7)
 
-```bash
-cd backend
-pytest -q
+| Phase | Feature | Status |
+|-------|---------|--------|
+| P0 | Enterprise Data Tool | ✅ |
+| P1 | Policy RAG + pgvector | ✅ |
+| P2 | LangGraph Checkpointer (PostgreSQL) | ✅ |
+| P3 | SSE Real-Time Streaming | ✅ |
+| P4 | RBAC (6 roles) | ✅ |
+| P5 | Alembic Migrations + bcrypt | ✅ |
+| P6 | Docker Production Deployment | ✅ |
+| P7 | System Acceptance (144/144) | ✅ |
 
-cd ../frontend
-npm run build
-```
+## Tech Stack
 
-## 运行模式说明
+- **Frontend**: Next.js 16 + Ant Design + TypeScript
+- **Backend**: FastAPI + LangGraph 0.2.28
+- **AI**: DeepSeek-chat
+- **Database**: PostgreSQL 16 + pgvector + Redis 7
+- **Auth**: JWT + bcrypt + RBAC
+- **Streaming**: SSE (Server-Sent Events)
+- **Deploy**: Docker Compose + Nginx
+- **Migration**: Alembic
 
-- `DATABASE_ENABLED=false`：比赛 Demo 模式，业务 Agent 通过 Tool Gateway 的内置演示数据运行。
-- `DATABASE_ENABLED=true`：初始化当前 SQLAlchemy 模型并连接 PostgreSQL；生产环境仍应补充正式 Alembic 迁移和真实数据工具实现。
-- `AUTH_ENABLED=false`：保持比赛演示开箱即用；生产部署必须启用认证、替换管理员密码和至少 32 位 `JWT_SECRET`。
+## Docs
 
-详细审计结论见 `docs/engineering/Code_Audit_Optimization_Report_V1.1.md`。
+See `docs/engineering/` for all design docs and implementation reports.
