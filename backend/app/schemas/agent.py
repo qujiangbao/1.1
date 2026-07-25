@@ -19,6 +19,7 @@ class ChatResponse(BaseModel):
     agents_used: List[str] = Field(default_factory=list)
     trace_id: Optional[str] = None
     execution_time_ms: Optional[int] = None
+    stream_url: Optional[str] = None  # P3: SSE 流地址 (streaming_enabled=true)
 
 
 class LoginRequest(BaseModel):

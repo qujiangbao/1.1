@@ -10,6 +10,87 @@ from app.agents.executor import execute_business_agent
 
 logger = logging.getLogger(__name__)
 
+# P3: EventBus 事件发布辅助
+def _emit_event(state: SupervisorState, event_type: str, payload: dict,
+                 source: str = "supervisor") -> None:
+    """发布事件到 EventBus (非阻塞)"""
+    import asyncio
+    from app.services.event_bus import get_event_bus
+    task_id = state.get("trace_id", "")
+    if not task_id:
+        return
+    event_bus = get_event_bus()
+    asyncio.ensure_future(event_bus.publish(task_id, event_type, payload, source=source))
+
+
+def _wrap_node(node_name: str):
+    """节点包装器: 在每个 supervisor node 前后发布事件 (不修改节点逻辑)"""
+    def decorator(fn):
+        def wrapper(state: SupervisorState) -> SupervisorState:
+            _emit_event(state, "supervisor_node", {"node": node_name, "phase": "start"})
+            try:
+                result = fn(state)
+                _emit_event(result, "supervisor_node",
+                            {"node": node_name, "phase": "complete"})
+                return result
+            except Exception as e:
+                _emit_event(state, "supervisor_node",
+                            {"node": node_name, "phase": "error", "error": str(e)})
+                raise
+        wrapper.__name__ = fn.__name__
+        wrapper.__doc__ = fn.__doc__
+        return wrapper
+    return decorator
+
+
+def _wrap_agent_router(fn):
+    """Agent 路由包装器: 在 agent 执行前后发布事件 (不修改原有逻辑)"""
+    def wrapper(state: SupervisorState) -> SupervisorState:
+        # 记录执行前的 task 状态
+        task_plan = state.get("task_plan", [])
+        idx = state.get("current_task_index", 0)
+        if 0 <= idx < len(task_plan):
+            task = task_plan[idx]
+            if task.get("status") not in ("completed", "failed"):
+                agent = task["agent"]
+                display = AGENT_REGISTRY.get(agent, {}).get("display", agent)
+                _emit_event(state, "agent_start", {
+                    "agent": agent, "display": display,
+                    "task_id": task.get("task_id", ""),
+                    "intent": task.get("intent", ""),
+                }, source="supervisor")
+
+        # 执行原有逻辑
+        try:
+            result = fn(state)
+        except Exception:
+            # 发布 agent_error
+            if 0 <= idx < len(task_plan):
+                task = task_plan[idx]
+                _emit_event(state, "agent_error", {
+                    "agent": task.get("agent", ""),
+                    "task_id": task.get("task_id", ""),
+                }, source="supervisor")
+            raise
+
+        # 执行后发布 agent_done
+        task_plan_after = result.get("task_plan", [])
+        agent_results = result.get("agent_results", {})
+        for agent, ar in agent_results.items():
+            summary = (ar.get("result") or {}).get("summary", "")
+            _emit_event(result, "agent_complete", {
+                "agent": agent,
+                "status": ar.get("status", "unknown"),
+                "summary": summary[:200],
+                "execution_time_ms": ar.get("execution_time_ms", 0),
+            }, source="supervisor")
+
+        return result
+
+    wrapper.__name__ = fn.__name__
+    wrapper.__doc__ = fn.__doc__
+    return wrapper
+
 # Intent → Agent 路由表
 INTENT_ROUTING = {
     "investment_search":     "InvestmentAgent",

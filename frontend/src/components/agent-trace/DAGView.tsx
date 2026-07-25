@@ -150,6 +150,60 @@ function buildLiveDAG(trace: any): { nodes: DAGNode[]; edges: DAGEdge[] } {
   };
 }
 
+// P3: 从 SSE 事件构建实时 DAG
+function buildRealtimeDAG(
+  events: { type: string; payload?: any }[],
+  agentNames: string[]
+): { nodes: DAGNode[]; edges: DAGEdge[] } {
+  const nodes: DAGNode[] = [
+    { id: "user", label: "用户需求", type: "user", status: "completed", x: 360, y: 20 },
+    { id: "supervisor", label: "Supervisor", type: "supervisor", status: "running", x: 360, y: 120 },
+  ];
+  const edges: DAGEdge[] = [{ from: "user", to: "supervisor" }];
+
+  let agentIndex = 0;
+  for (const evt of events) {
+    const p = evt.payload || {};
+    if (evt.type === "agent_start" && p.agent) {
+      nodes.push({
+        id: p.agent,
+        label: p.agent,
+        type: "agent",
+        agent: p.display || p.agent,
+        status: "running",
+        x: agentIndex % 2 === 0 ? 220 : 500,
+        y: 240 + Math.floor(agentIndex / 2) * 130,
+      });
+      edges.push({ from: "supervisor", to: p.agent });
+      agentIndex++;
+    } else if (evt.type === "agent_done" && p.agent) {
+      const node = nodes.find((n) => n.id === p.agent);
+      if (node) {
+        node.status = "completed";
+        node.output = p.summary || "";
+        node.duration_ms = p.execution_time_ms || 0;
+      }
+    } else if (evt.type === "node_complete" && p.node) {
+      const sup = nodes.find((n) => n.id === "supervisor");
+      if (sup) sup.action = p.node;
+    }
+  }
+
+  if (events.some((e) => e.type === "done")) {
+    const sup = nodes.find((n) => n.id === "supervisor");
+    if (sup) sup.status = "completed";
+    const maxY = Math.max(240, ...nodes.filter((n) => n.type === "agent").map((n) => n.y));
+    nodes.push({
+      id: "result", label: "最终报告", type: "result",
+      status: "completed", x: 360, y: maxY + 130,
+    });
+    nodes.filter((n) => n.type === "agent" && n.status === "completed")
+      .forEach((n) => edges.push({ from: n.id, to: "result" }));
+  }
+
+  return { nodes, edges };
+}
+
 const TYPE_STYLE: Record<string, { color: string; icon: React.ReactNode; bg: string }> = {
   user:       { color: "#8c8c8c", icon: <UserOutlined />,        bg: "#fafafa" },
   supervisor: { color: "#1677ff", icon: <DeploymentUnitOutlined />, bg: "#e6f4ff" },
@@ -194,7 +248,7 @@ function DAGNodeCard({
           </span>
           <span style={{ fontWeight: 700, fontSize: 13, flex: 1 }}>{node.label}</span>
           <Badge
-            status={node.status === "completed" ? "success" : node.status === "running" ? "processing" : "default"}
+            status={node.status === "completed" ? "success" : node.status === "running" ? "processing" : node.status === "failed" ? "error" : "default"}
           />
         </div>
         {node.action && (
@@ -254,14 +308,72 @@ function SVGEdge({ edge, nodes }: { edge: DAGEdge; nodes: DAGNode[] }) {
   );
 }
 
-export default function AgentTraceDAG({ taskId }: { taskId?: string }) {
+export default function AgentTraceDAG({ taskId, live = false }: { taskId?: string; live?: boolean }) {
   const [dag, setDag] = useState(() => buildChampionDAG());
   const [selectedNode, setSelectedNode] = useState<DAGNode | null>(null);
   const [loading, setLoading] = useState(Boolean(taskId));
   const [error, setError] = useState("");
 
+  // P3: live 模式 — SSE 实时更新 DAG
   useEffect(() => {
-    if (!taskId) return;
+    if (!live || !taskId) return;
+    setLoading(true);
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
+    const es = new EventSource(`${API_URL}/agent/stream/${taskId}`);
+
+    const collectedEvents: { type: string; payload?: any }[] = [];
+
+    // 初始空 DAG
+    setDag({
+      nodes: [
+        { id: "user", label: "用户需求", type: "user", status: "completed", x: 360, y: 20 },
+        { id: "supervisor", label: "Supervisor", type: "supervisor", status: "running", x: 360, y: 120 },
+      ],
+      edges: [{ from: "user", to: "supervisor" }],
+    });
+
+    es.addEventListener("node_complete", (e) => {
+      const parsed = JSON.parse(e.data);
+      collectedEvents.push({ type: "node_complete", payload: parsed.payload });
+      setDag(buildRealtimeDAG(collectedEvents, []));
+    });
+
+    es.addEventListener("agent_start", (e) => {
+      const parsed = JSON.parse(e.data);
+      collectedEvents.push({ type: "agent_start", payload: parsed.payload });
+      setDag(buildRealtimeDAG(collectedEvents, []));
+    });
+
+    es.addEventListener("agent_done", (e) => {
+      const parsed = JSON.parse(e.data);
+      collectedEvents.push({ type: "agent_done", payload: parsed.payload });
+      setDag(buildRealtimeDAG(collectedEvents, []));
+    });
+
+    es.addEventListener("agent_error", (e) => {
+      const parsed = JSON.parse(e.data);
+      collectedEvents.push({ type: "agent_error", payload: parsed.payload });
+      setDag(buildRealtimeDAG(collectedEvents, []));
+    });
+
+    es.addEventListener("done", () => {
+      collectedEvents.push({ type: "done" });
+      setDag(buildRealtimeDAG(collectedEvents, []));
+      setLoading(false);
+      es.close();
+    });
+
+    es.onerror = () => {
+      setLoading(false);
+      es.close();
+    };
+
+    return () => es.close();
+  }, [live, taskId]);
+
+  // v1.2: 非 live 模式 — fetch trace
+  useEffect(() => {
+    if (live || !taskId) return;
     setLoading(true);
     apiFetch(`${process.env.NEXT_PUBLIC_API_URL || "/api/v1"}/agent/task/${taskId}/trace`)
       .then(async (response) => {
@@ -271,14 +383,17 @@ export default function AgentTraceDAG({ taskId }: { taskId?: string }) {
       .then((trace) => setDag(buildLiveDAG(trace)))
       .catch((reason) => setError(reason instanceof Error ? reason.message : "执行链路加载失败"))
       .finally(() => setLoading(false));
-  }, [taskId]);
+  }, [taskId, live]);
 
   const svgH = Math.max(680, ...dag.nodes.map((node) => node.y + 100));
   const svgW = 750;
 
   return (
     <div>
-      <h2 style={{ marginBottom: 4 }}>Agent Trace — DAG 可视化</h2>
+      <h2 style={{ marginBottom: 4 }}>
+        Agent Trace — DAG 可视化
+        {live && <Tag color="blue" style={{ marginLeft: 8 }}>LIVE</Tag>}
+      </h2>
       <p style={{ color: "#999", marginBottom: 16, fontSize: 13 }}>
         点击节点查看详情 · 蓝色=串行 · 橙色虚线=并行
       </p>
@@ -346,8 +461,8 @@ export default function AgentTraceDAG({ taskId }: { taskId?: string }) {
               <Descriptions.Item label="动作">{selectedNode.action}</Descriptions.Item>
             )}
             <Descriptions.Item label="状态">
-              <Badge status={selectedNode.status === "completed" ? "success" : "processing"}
-                text={selectedNode.status === "completed" ? "完成" : "执行中"} />
+              <Badge status={selectedNode.status === "completed" ? "success" : selectedNode.status === "running" ? "processing" : "error"}
+                text={selectedNode.status === "completed" ? "完成" : selectedNode.status === "running" ? "执行中" : "失败"} />
             </Descriptions.Item>
             {selectedNode.duration_ms && (
               <Descriptions.Item label="耗时">
