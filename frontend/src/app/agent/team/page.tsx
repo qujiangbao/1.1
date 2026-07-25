@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Card, Row, Col, Tag, Timeline, Statistic, Spin } from "antd";
+import { Card, Row, Col, Tag, Timeline, Statistic, Spin, Alert, Button } from "antd";
 import {
   TeamOutlined, ExperimentOutlined, ShoppingOutlined,
   SafetyOutlined, FileTextOutlined, DashboardOutlined,
@@ -28,16 +28,20 @@ const STATUS_COLOR: Record<string, string> = {
 export default function AgentTeamPage() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     apiFetch(`${API}/agent/team/status`)
       .then((r) => r.json())
       .then((d) => setData(d.data))
+      .catch((e) => setError(e.message || "无法获取Agent团队状态"))
       .finally(() => setLoading(false));
   }, []);
 
   if (loading) return <Spin size="large" style={{ display: "block", margin: "60px auto" }} />;
-  if (!data) return null;
+  if (error) return <Alert type="error" message="Agent团队状态获取失败" description={error}
+    style={{ margin: 24 }} action={<Button onClick={() => window.location.reload()}>重试</Button>} />;
+  if (!data) return <Alert type="warning" message="暂无Agent数据" style={{ margin: 24 }} />;
 
   const agents = data.agents || {};
 
