@@ -17,6 +17,10 @@ async def init_db(database_url: str):
     SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    # P4: Seed RBAC data
+    async with SessionLocal() as session:
+        from app.database.models.rbac import seed_rbac_data
+        await seed_rbac_data(session)
 
 
 async def close_db():

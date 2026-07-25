@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Alert, Button, Card, Form, Input, Typography } from "antd";
 import { LockOutlined, UserOutlined } from "@ant-design/icons";
+import { useUserContext } from "@/contexts/UserContext";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
@@ -11,6 +12,7 @@ export default function LoginPage() {
   const router = useRouter();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const { setUser } = useUserContext();
 
   const submit = async (values: { username: string; password: string }) => {
     setLoading(true);
@@ -21,9 +23,19 @@ export default function LoginPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(values),
       });
-      if (!response.ok) throw new Error("用户名或密码错误");
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || "用户名或密码错误");
+      }
       const data = await response.json();
       localStorage.setItem("token", data.access_token);
+      if (data.refresh_token) localStorage.setItem("refresh_token", data.refresh_token);
+
+      // P4: 存储 user info 到 context
+      if (data.user) {
+        localStorage.setItem("user", JSON.stringify(data.user));
+        setUser(data.user);
+      }
       router.replace("/agent/workspace");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "登录失败");
