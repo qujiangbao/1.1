@@ -52,14 +52,20 @@ def verify_token(token: str) -> dict | None:
 
 
 def hash_password(password: str) -> str:
-    """SHA-256 密码哈希 (生产环境应使用 bcrypt/argon2)"""
-    import hashlib
-    return hashlib.sha256(password.encode()).hexdigest()
+    """bcrypt 密码哈希 (P5: 升级自 SHA256)"""
+    import bcrypt
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    """验证密码"""
-    return hash_password(password) == password_hash
+    """验证密码 (兼容 bcrypt + SHA256 legacy)"""
+    import bcrypt
+    try:
+        return bcrypt.checkpw(password.encode(), password_hash.encode())
+    except ValueError:
+        # Legacy SHA256 fallback
+        import hashlib
+        return hashlib.sha256(password.encode()).hexdigest() == password_hash
 
 
 # ═══ FastAPI Dependencies ═══

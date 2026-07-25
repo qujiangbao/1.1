@@ -25,6 +25,7 @@ class User(Base):
     password_hash = Column(String(256), nullable=False)
     display_name = Column(String(200))
     park_id = Column(String(50))
+    data_scope = Column(String(50), default="all")   # P5: 数据隔离范围 (all / park)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -179,8 +180,8 @@ async def seed_rbac_data(db_session):
                     ))
 
     # Default admin user
-    import hashlib
-    admin_hash = hashlib.sha256("admin123".encode()).hexdigest()
+    import bcrypt
+    admin_hash = bcrypt.hashpw("admin123".encode(), bcrypt.gensalt()).decode()
     existing_admin = await db_session.execute(
         select(User).where(User.username == "admin")
     )
