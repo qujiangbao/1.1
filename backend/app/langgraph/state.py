@@ -74,6 +74,9 @@ class SupervisorState(TypedDict):
     trace_id: str
     trace_steps: List[TraceStep]
 
+    # P2: Conversation history injected by API layer
+    history_messages: Optional[List[Dict]]
+
     # Timing
     started_at: str
     completed_at: Optional[str]

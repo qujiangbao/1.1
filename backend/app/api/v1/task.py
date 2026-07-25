@@ -1,4 +1,4 @@
-"""Task API"""
+"""Task API (P2: async graph)"""
 from fastapi import APIRouter, HTTPException
 from app.schemas.agent import ChatRequest
 
@@ -14,7 +14,9 @@ async def create_task(request: ChatRequest):
 @router.get("/agent/task/{task_id}")
 async def get_task(task_id: str):
     from app.langgraph.graph import get_supervisor_graph
-    state = get_supervisor_graph().get_state({"configurable": {"thread_id": task_id}})
+    # P2: async initialization
+    graph = await get_supervisor_graph()
+    state = graph.get_state({"configurable": {"thread_id": task_id}})
     if state is None or not state.values:
         raise HTTPException(status_code=404, detail="Task not found")
     values = state.values

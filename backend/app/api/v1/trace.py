@@ -1,4 +1,4 @@
-"""Trace API — 从 LangGraph Checkpointer 检索真实执行链路"""
+"""Trace API — 从 LangGraph Checkpointer 检索真实执行链路 (P2: async graph)"""
 from fastapi import APIRouter
 from app.schemas.agent import TraceResponse
 from app.langgraph.graph import get_supervisor_graph
@@ -10,9 +10,10 @@ router = APIRouter()
 
 @router.get("/agent/task/{task_id}/trace", response_model=TraceResponse)
 async def get_trace(task_id: str):
-    """从 LangGraph MemorySaver 检索真实 trace_steps 和 task_plan"""
+    """从 LangGraph checkpointer 检索真实 trace_steps 和 task_plan"""
     try:
-        graph = get_supervisor_graph()
+        # P2: async initialization
+        graph = await get_supervisor_graph()
         config = {"configurable": {"thread_id": task_id}}
         state = graph.get_state(config)
 
@@ -24,7 +25,6 @@ async def get_trace(task_id: str):
         task_plan = sv.get("task_plan", [])
         agent_results = sv.get("agent_results", {})
 
-        # 1. Build nodes: Supervisor + all agent_result entries
         nodes = [{"id": "supervisor", "label": "Supervisor", "type": "supervisor"}]
         for agent_name, ar in agent_results.items():
             nodes.append({
@@ -36,7 +36,6 @@ async def get_trace(task_id: str):
                 "execution_time_ms": ar.get("execution_time_ms", 0),
             })
 
-        # 2. Build edges: Supervisor → agent nodes, based on task_plan order
         edges = []
         prev_agent = "supervisor"
         for task in task_plan:
@@ -45,7 +44,6 @@ async def get_trace(task_id: str):
                 edges.append({"from": prev_agent, "to": agent_id})
                 prev_agent = agent_id
 
-        # 3. Convert trace_steps to the response format
         steps = []
         for ts in trace_steps:
             steps.append({
@@ -59,7 +57,6 @@ async def get_trace(task_id: str):
                 "duration_ms": ts.get("duration_ms", 0),
             })
 
-        # 4. Extract task plan summary
         plan_summary = []
         for t in task_plan:
             plan_summary.append({
@@ -108,7 +105,6 @@ def _fallback_trace(task_id: str, reason: str) -> TraceResponse:
 
 
 def _minimal_steps(agent_results: dict) -> list:
-    """从 agent_results 生成最小 steps（当 trace_steps 为空时）"""
     steps = []
     for i, (name, ar) in enumerate(agent_results.items()):
         steps.append({
@@ -133,7 +129,6 @@ def _minimal_nodes(agent_results: dict, task_plan: list) -> list:
         if aid not in seen:
             nodes.append({"id": aid, "label": agent, "type": "agent"})
             seen.add(aid)
-    # Add any agents in results not in task_plan
     for name in agent_results:
         aid = name.lower()
         if aid not in seen:

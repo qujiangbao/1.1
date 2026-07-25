@@ -54,6 +54,18 @@ class AgentTrace(Base):
     duration_ms = Column(Integer)
 
 
+class AgentMemory(Base):
+    """P2: Agent 对话记忆 — 持久化多轮对话上下文"""
+    __tablename__ = "agent_memory"
+
+    memory_id = Column(String(50), primary_key=True)
+    conversation_id = Column(String(50), ForeignKey("conversation.conversation_id"), nullable=False)
+    role = Column(String(20), nullable=False)  # user / assistant / system
+    content = Column(Text, nullable=False)
+    metadata_ = Column("metadata", JSONB, default={})
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Conversation(Base):
     __tablename__ = "conversation"
 
@@ -61,4 +73,9 @@ class Conversation(Base):
     user_id = Column(String(50))
     title = Column(String(500))
     status = Column(String(30), default="active")
+    # P2: Checkpointer + Memory 集成
+    thread_id = Column(String(50), nullable=True)        # LangGraph thread_id
+    message_count = Column(Integer, default=0)            # 消息计数
+    last_message_at = Column(DateTime, nullable=True)     # 最后消息时间
     created_time = Column(DateTime, default=datetime.utcnow)
+    updated_time = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

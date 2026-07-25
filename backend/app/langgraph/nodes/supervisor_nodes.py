@@ -59,6 +59,21 @@ def user_input_node(state: SupervisorState) -> SupervisorState:
     state["trace_steps"] = []
     state["error_count"] = 0
     state["retry_count"] = 0
+
+    # P2: 注入对话历史（API 层通过 history_messages 传入）
+    history = state.get("history_messages", [])
+    if history:
+        existing = state.get("messages", [])
+        state["messages"] = history + existing
+
+    # P2: 保存用户消息到 messages 用于 checkpointer 持久化
+    if "messages" not in state or not state["messages"]:
+        state["messages"] = []
+    state["messages"] = state.get("messages", []) + [{
+        "role": "user",
+        "content": state.get("user_query", ""),
+        "timestamp": state["started_at"],
+    }]
     return state
 
 
@@ -155,7 +170,9 @@ def agent_router_node(state: SupervisorState) -> SupervisorState:
         return state
 
     task = task_plan[idx]
-    if task.get("status") == "completed":
+
+    # P2: 跳过 completed 和 failed 的 task（断点续跑）
+    if task.get("status") in ("completed", "failed"):
         state["current_task_index"] = idx + 1
         return state
 
@@ -226,4 +243,13 @@ def result_aggregator_node(state: SupervisorState) -> SupervisorState:
 def final_response_node(state: SupervisorState) -> SupervisorState:
     state["status"] = "completed"
     state["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+    # P2: 追加 assistant 消息到 messages（checkpointer 自动持久化）
+    messages = list(state.get("messages", []))
+    messages.append({
+        "role": "assistant",
+        "content": state.get("final_response", ""),
+        "timestamp": state["completed_at"],
+    })
+    state["messages"] = messages
     return state
