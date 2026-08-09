@@ -92,6 +92,36 @@ def _sections(text: str) -> list[tuple[str, str]]:
     return sections
 
 
+def _wide_table_sections(text: str) -> list[tuple[str, str]]:
+    """Convert a CSV/XLSX-style enterprise wide table into normal sections."""
+    output: list[tuple[str, str]] = []
+    blocks = re.split(r"\n\s*\n", text)
+    for block in blocks:
+        rows = _table_rows(block)
+        if len(rows) < 2:
+            continue
+        headers = [re.sub(r"[\s*]", "", cell) for cell in rows[0]]
+        name_index = next(
+            (index for index, header in enumerate(headers) if header in {"企业名称", "公司名称"}),
+            None,
+        )
+        if name_index is None:
+            continue
+        for row in rows[1:]:
+            if name_index >= len(row):
+                continue
+            name = _company_name(row[name_index])
+            if not name:
+                continue
+            vertical_rows = []
+            for index, header in enumerate(headers):
+                value = row[index] if index < len(row) else ""
+                if header and value:
+                    vertical_rows.append(f"| {header} | {value} |")
+            output.append((name, "\n".join(vertical_rows)))
+    return output
+
+
 def _row_value(rows: list[list[str]], aliases: tuple[str, ...]) -> str | None:
     for row in rows:
         if len(row) < 2:
@@ -195,7 +225,13 @@ def extract_document_structure(
     """Extract explicit enterprise records and risk rows from Markdown text."""
     collected_at = created_at or datetime.now(timezone.utc).isoformat()
     enterprises: list[dict[str, Any]] = []
-    for name, body in _sections(text):
+    sections = _sections(text)
+    known_names = {name for name, _body in sections}
+    sections.extend(
+        (name, body) for name, body in _wide_table_sections(text)
+        if name not in known_names
+    )
+    for name, body in sections:
         rows = _table_rows(body)
         fields = {
             key: _row_value(rows, aliases)

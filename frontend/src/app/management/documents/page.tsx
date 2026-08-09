@@ -22,7 +22,7 @@ import {
 import type { UploadProps } from "antd";
 import {
   CloudUploadOutlined,
-  DeleteOutlined,
+  InboxOutlined,
   FileDoneOutlined,
   FileSearchOutlined,
   FolderOpenOutlined,
@@ -34,6 +34,8 @@ import {
   deleteParkDocument,
   listParkDocuments,
   type ParkDocument,
+  type ParkDocumentPreview,
+  previewParkDocument,
   uploadParkDocument,
 } from "@/api/documents.api";
 
@@ -52,6 +54,7 @@ export default function ParkDocumentsPage() {
   const [category, setCategory] = useState("园区综合资料");
   const [tags, setTags] = useState("");
   const [query, setQuery] = useState("");
+  const [lastPreview, setLastPreview] = useState<ParkDocumentPreview | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -76,18 +79,22 @@ export default function ParkDocumentsPage() {
 
   const uploadProps: UploadProps = {
     multiple: true,
-    accept: ".pdf,.docx,.pptx,.txt,.md",
+    accept: ".pdf,.docx,.pptx,.xlsx,.csv,.txt,.md",
     showUploadList: false,
     customRequest: async ({ file, onSuccess, onError }) => {
       setUploading(true);
       try {
-        const record = await uploadParkDocument(file as File, category, tags);
+        const selectedFile = file as File;
+        const preview = await previewParkDocument(selectedFile, category);
+        setLastPreview(preview);
+        preview.warnings.forEach((warning) => message.warning(warning));
+        const record = await uploadParkDocument(selectedFile, category, tags);
         if (record.duplicate) {
           message.info(`${record.name} 与资料库现有内容重复，未再次导入`);
         } else if (record.status === "READY") {
           setDocuments((current) => [record, ...current]);
           const structured = record.structured_enterprises
-            ? `，识别 ${record.structured_enterprises} 家企业、${record.structured_risk_events || 0} 条风险事件；企业已自动加入政策预匹配范围`
+            ? `，识别 ${record.structured_enterprises} 家企业、${record.structured_risk_events || 0} 条风险事件；企业已加入已审核政策规则的自动匹配范围`
             : "";
           message.success(`${record.name} 已解析并加入资料库${structured}`);
         } else {
@@ -109,7 +116,7 @@ export default function ParkDocumentsPage() {
     try {
       await deleteParkDocument(record.id);
       setDocuments((current) => current.filter((item) => item.id !== record.id));
-      message.success("资料及解析文本已删除");
+      message.success("资料已归档，可由管理员通过恢复接口找回");
     } catch (reason) {
       message.error(reason instanceof Error ? reason.message : "删除失败");
     }
@@ -153,21 +160,34 @@ export default function ParkDocumentsPage() {
               <Dragger {...uploadProps} disabled={uploading}>
                 <p className="ant-upload-drag-icon"><CloudUploadOutlined /></p>
                 <p className="ant-upload-text">点击或拖拽文件到这里</p>
-                <p className="ant-upload-hint">支持 PDF、DOCX、PPTX、TXT、Markdown，可一次选择多个文件</p>
+                <p className="ant-upload-hint">支持 PDF、DOCX、PPTX、XLSX、CSV、TXT、Markdown，可一次选择多个文件</p>
               </Dragger>
             </Space>
+            {lastPreview ? (
+              <Alert
+                type={lastPreview.warnings.length ? "warning" : "success"}
+                showIcon
+                message={`最近预检：${lastPreview.name}`}
+                description={
+                  `可提取 ${lastPreview.text_length.toLocaleString()} 字；识别 ${lastPreview.structured_enterprises} 家企业、${lastPreview.structured_risk_events} 条风险事件` +
+                  (lastPreview.enterprise_names.length ? `。企业：${lastPreview.enterprise_names.slice(0, 5).join("、")}` : "")
+                }
+                style={{ marginTop: 16 }}
+              />
+            ) : null}
             <Alert
               type="warning"
               showIcon
               message="导入格式与解析要求"
               description={(
                 <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
-                  <li>支持 PDF、DOCX、PPTX、TXT、Markdown，单文件不超过 25 MB。</li>
-                  <li>TXT 和 Markdown 必须使用 UTF-8 编码；扫描图片型 PDF 暂不支持 OCR。</li>
+                  <li>支持 PDF、DOCX、PPTX、XLSX、CSV、TXT、Markdown，单文件不超过 25 MB；上传前自动预检。</li>
+                  <li>TXT 和 Markdown 必须使用 UTF-8；CSV 支持 UTF-8/GB18030；扫描图片型 PDF 暂不支持 OCR。</li>
                   <li>文件中必须包含可提取文字；分类可选，标签最多读取 20 个。</li>
                   <li>分类决定资料用途：“政策文件”进入政策匹配，“企业资料”进入企业画像与风险证据。</li>
                   <li>园区规划、招商资料和会议纪要主要用于检索引用；“园区综合资料”会按标题、标签和正文结构判断是否同时补充企业或政策线索。</li>
-                  <li>Markdown 中以企业名称为二级标题、以表格列出工商/审核字段时，可自动结构化。</li>
+                  <li>Markdown/DOCX 可用企业名称二级标题加字段表；CSV/XLSX 第一行须为表头且包含“企业名称”列，每行一家企业。</li>
+                  <li>推荐字段：统一社会信用代码、法定代表人、注册资本、成立日期、注册地址、经营状态、企业类型、经营范围、员工总数、专利数量、官方网站。</li>
                   <li>系统按文件指纹和规范化正文去重；重复内容不会再次写入。</li>
                 </ul>
               )}
@@ -211,8 +231,8 @@ export default function ParkDocumentsPage() {
                   title: "操作",
                   width: 74,
                   render: (_value, record) => (
-                    <Popconfirm title="删除这份资料？" description="原始文件和已提取文本都会删除，无法恢复。" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => void remove(record)}>
-                      <Button type="text" danger icon={<DeleteOutlined />} aria-label={`删除 ${record.name}`} />
+                    <Popconfirm title="归档这份资料？" description="归档后不再参与检索和企业匹配，但原始文件仍可恢复。" okText="归档" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => void remove(record)}>
+                      <Button type="text" danger icon={<InboxOutlined />} aria-label={`归档 ${record.name}`} />
                     </Popconfirm>
                   ),
                 },

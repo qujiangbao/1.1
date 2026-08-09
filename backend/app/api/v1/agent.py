@@ -13,6 +13,7 @@ from app.core.security import (
 )
 from app.schemas.agent import ChatRequest, ChatResponse, CheckpointStatus
 from app.langgraph.graph import get_supervisor_graph
+from app.core.data_mode import require_allowed_data_mode
 
 router = APIRouter()
 
@@ -37,7 +38,7 @@ async def agent_chat(
     requested_mode = (
         str((request.context or {}).get("data_mode", "real")).strip().lower()
     )
-    data_mode = "demo" if requested_mode == "demo" else "real"
+    data_mode = require_allowed_data_mode(requested_mode)
     current_date = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
 
     # P2: DB tool + 对话历史

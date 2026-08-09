@@ -155,8 +155,8 @@ def _summary(agent_name: str, result: dict[str, Any]) -> str:
         next_steps = result.get("next_steps", [])
         steps = "；".join(str(item) for item in next_steps if item)
         return (
-            f"已识别为{service_name}需求。当前未接入正式企业服务工单系统，"
-            f"本次不会创建工单。建议：{steps or '交由企业服务人员人工登记'}。"
+            f"已识别为{service_name}需求。本次对话不会擅自创建业务工单；"
+            f"请在“企业服务工单”提交后进入正式受理流程。建议：{steps or '补充企业名称和具体诉求'}。"
         )
     if agent_name == "BIAgent":
         kpi = result.get("kpi", {})

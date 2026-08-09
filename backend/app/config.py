@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     # not force JSON decoding before the comma-separated validator can run.
     cors_origins: str | list[str] = ["http://localhost:3000"]
     llm_warmup_enabled: bool = True
+    enable_demo_mode: bool = False
 
     @field_validator("cors_origins", mode="before")
     @classmethod
@@ -164,6 +165,25 @@ class Settings(BaseSettings):
                 raise ValueError("DATABASE_ENABLED must be true in production")
             if not self.auth_enabled:
                 raise ValueError("AUTH_ENABLED must be true in production")
+            if self.enable_demo_mode:
+                raise ValueError("ENABLE_DEMO_MODE must be false in production")
+            if self.enterprise_data_source == "mock":
+                raise ValueError("Mock enterprise data is forbidden in production")
+            if self.policy_rag_mode == "mock":
+                raise ValueError("Mock policy retrieval is forbidden in production")
+            if self.enterprise_data_source == "tianyancha" and is_placeholder(
+                self.tianyancha_api_key
+            ):
+                raise ValueError("Tianyancha data source requires a real API key")
+            if self.enterprise_data_source == "qichacha" and (
+                is_placeholder(self.qichacha_app_key)
+                or is_placeholder(self.qichacha_secret_key)
+            ):
+                raise ValueError("Qichacha data source requires real credentials")
+            if self.enterprise_data_source == "government":
+                raise ValueError(
+                    "Government enterprise adapter is not implemented for production"
+                )
             if self.auth_enabled and (
                 self.admin_password == "admin" or is_placeholder(self.admin_password)
             ):

@@ -120,32 +120,15 @@ def test_risk_dashboard_uses_imported_evidence_without_demo_substitution():
     assert data["source"] == "park_document_evidence"
 
 
-def test_demo_mode_is_explicit_and_coherent_across_dashboards():
+def test_demo_mode_is_disabled_across_public_dashboards():
     with TestClient(app) as client:
         overview = client.get("/api/v1/dashboard/overview?mode=demo")
         bi = client.get("/api/v1/dashboard/bi?mode=demo")
         risk = client.get("/api/v1/dashboard/risk?mode=demo")
         report = client.get("/api/v1/agent/daily-report?mode=demo")
 
-    assert overview.status_code == 200
-    overview_data = overview.json()["data"]
-    assert overview_data["metadata"]["is_demo"] is True
-    assert "非真实经营数据" in overview_data["metadata"]["disclaimer"]
-    assert overview_data["park_overview"]["total_enterprises"] == 36
-    assert sum(overview_data["risk"].values()) == 36
-
-    bi_data = bi.json()["data"]
-    assert bi_data["metadata"]["is_demo"] is True
-    assert bi_data["metadata"]["investment_funnel_data_available"] is True
-    assert bi_data["investment_funnel"][0]["count"] == 36
-    assert bi_data["investment_funnel"][-1]["count"] == 2
-
-    risk_data = risk.json()["data"]
-    assert risk_data["is_demo"] is True
-    assert risk_data["evaluated_enterprises"] == 5
-    assert sum(risk_data["distribution"].values()) == 5
-    assert all(item["name"].startswith("示例招商企业-") for item in risk_data["enterprises"])
-
-    report_data = report.json()["data"]
-    assert report_data["metadata"]["is_demo"] is True
-    assert report_data["investment"]["data_available"] is True
+    assert {overview.status_code, bi.status_code, risk.status_code, report.status_code} == {403}
+    assert all(
+        "演示数据模式" in response.json()["detail"]
+        for response in (overview, bi, risk, report)
+    )

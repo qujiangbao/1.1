@@ -66,9 +66,9 @@ export default function LoginPage() {
           <span className="login-point"><CheckCircleOutlined /> 业务闭环</span>
         </div>
         <div className="login-metrics" aria-label="平台能力概览">
-          <div className="login-metric"><strong>10</strong><span>类业务入口</span></div>
+          <div className="login-metric"><strong>多</strong><span>类业务入口</span></div>
           <div className="login-metric"><strong>6</strong><span>类智能体角色</span></div>
-          <div className="login-metric"><strong>214</strong><span>条政策公开快照</span></div>
+          <div className="login-metric"><strong>持续</strong><span>更新政策公开快照</span></div>
         </div>
       </section>
       <section className="login-panel" aria-label="账号登录">

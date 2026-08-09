@@ -21,6 +21,7 @@ from app.services.policy_eligibility_service import (
     reviewed_source_policy_conditions,
     source_policy_conditions,
 )
+from app.services.policy_condition_extractor import extract_policy_condition_drafts
 
 
 router = APIRouter()
@@ -247,6 +248,50 @@ async def update_policy_conditions(
     return {
         "success": True,
         "data": _managed_policy_dump(policy),
+        "updated_chunks": len(chunks),
+    }
+
+
+@router.post("/policy-management/policies/{policy_id}/conditions/extract")
+async def extract_policy_conditions(
+    policy_id: str,
+    session: AsyncSession = Depends(investment_db),
+    _user: UserContext = Depends(require_any_role(*WRITE_ROLES)),
+):
+    """Extract source-backed drafts; never mark them reviewed automatically."""
+    policy = await session.get(Policy, policy_id)
+    if policy is None:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    drafts = extract_policy_condition_drafts(policy.content or "")
+    existing = source_policy_conditions([
+        item for item in (policy.eligibility_conditions or [])
+        if isinstance(item, dict)
+    ])
+    reviewed = reviewed_source_policy_conditions(existing)
+    conditions = [*reviewed, *drafts]
+    policy.eligibility_conditions = conditions
+    policy.conditions_reviewed_at = (
+        policy.conditions_reviewed_at if reviewed else None
+    )
+    policy.conditions_reviewed_by = (
+        policy.conditions_reviewed_by if reviewed else None
+    )
+    chunks = list((await session.execute(
+        select(PolicyChunk).where(PolicyChunk.policy_id == policy_id)
+    )).scalars().all())
+    for chunk in chunks:
+        chunk.metadata_ = {
+            **(chunk.metadata_ or {}),
+            "requirements": conditions,
+            "condition_extraction": "source_text_deterministic_v1",
+        }
+    await session.commit()
+    await session.refresh(policy)
+    return {
+        "success": True,
+        "data": _managed_policy_dump(policy),
+        "extracted_count": len(drafts),
+        "preserved_reviewed_count": len(reviewed),
         "updated_chunks": len(chunks),
     }
 

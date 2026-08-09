@@ -24,6 +24,18 @@ export interface ParkDocument {
   structured_risk_events?: number;
 }
 
+export interface ParkDocumentPreview {
+  name: string;
+  format: string;
+  file_size: number;
+  page_count: number;
+  text_length: number;
+  structured_enterprises: number;
+  structured_risk_events: number;
+  enterprise_names: string[];
+  warnings: string[];
+}
+
 export async function listParkDocuments() {
   const payload = await apiJson<{ success: boolean; data: ParkDocument[] }>(`${API}/documents`);
   return payload.data;
@@ -47,4 +59,19 @@ export async function uploadParkDocument(file: File, category: string, tags: str
 
 export async function deleteParkDocument(documentId: string) {
   return apiJson(`${API}/documents/${encodeURIComponent(documentId)}`, { method: "DELETE" });
+}
+
+export async function previewParkDocument(file: File, category: string) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("category", category);
+  const response = await apiFetch(`${API}/documents/preview`, { method: "POST", body: form });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = payload && typeof payload === "object" && "detail" in payload
+      ? String((payload as { detail?: unknown }).detail || "")
+      : "";
+    throw new ApiError(detail || `预检失败（HTTP ${response.status}）`, response.status, payload);
+  }
+  return (payload as { data: ParkDocumentPreview }).data;
 }

@@ -25,7 +25,7 @@ INDEX_PATH = LIBRARY_ROOT / "index.json"
 FILES_DIR = LIBRARY_ROOT / "files"
 TEXT_DIR = LIBRARY_ROOT / "text"
 STRUCTURED_DIR = LIBRARY_ROOT / "structured"
-ALLOWED_SUFFIXES = {".pdf", ".docx", ".pptx", ".txt", ".md"}
+ALLOWED_SUFFIXES = {".pdf", ".docx", ".pptx", ".xlsx", ".csv", ".txt", ".md"}
 ALLOWED_CATEGORIES = {
     "园区规划", "招商资料", "企业资料", "政策文件", "会议纪要", "园区综合资料",
 }
@@ -143,7 +143,7 @@ def _save_index(items: list[dict[str, Any]]) -> None:
         temporary.replace(INDEX_PATH)
 
 
-def list_park_documents() -> list[dict[str, Any]]:
+def list_park_documents(*, include_archived: bool = False) -> list[dict[str, Any]]:
     with _INDEX_LOCK:
         items = _load_index()
         changed = False
@@ -172,7 +172,10 @@ def list_park_documents() -> list[dict[str, Any]]:
                 continue
         if changed:
             _save_index(items)
-    return sorted(items, key=lambda item: item["created_at"], reverse=True)
+    visible = items if include_archived else [
+        item for item in items if item.get("status") != "ARCHIVED"
+    ]
+    return sorted(visible, key=lambda item: item["created_at"], reverse=True)
 
 
 async def import_park_document(
@@ -186,7 +189,7 @@ async def import_park_document(
     _ensure_dirs()
     suffix = Path(original_name).suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
-        raise ValueError("仅支持 PDF、DOCX、PPTX、TXT 和 Markdown 文件")
+        raise ValueError("仅支持 PDF、DOCX、PPTX、XLSX、CSV、TXT 和 Markdown 文件")
     category = category.strip() or "园区综合资料"
     if category not in ALLOWED_CATEGORIES:
         raise ValueError("资料分类无效，请从系统支持的分类中选择")
@@ -205,13 +208,26 @@ async def import_park_document(
                     existing_content_hash = _content_hash(
                         existing_text.read_text(encoding="utf-8", errors="ignore")
                     )
-            if (
-                existing.get("status") == "READY"
-                and (
-                    existing.get("file_hash") == parsed.file_hash
-                    or existing_content_hash == normalized_hash
-                )
-            ):
+            same_content = (
+                existing.get("file_hash") == parsed.file_hash
+                or existing_content_hash == normalized_hash
+            )
+            if not same_content:
+                continue
+            if existing.get("status") == "ARCHIVED":
+                existing["status"] = "READY"
+                existing["restored_at"] = datetime.now(timezone.utc).isoformat()
+                existing["restored_by"] = created_by
+                existing.pop("archived_at", None)
+                existing.pop("archived_by", None)
+                _save_index(items)
+                return {
+                    **existing,
+                    "duplicate": True,
+                    "duplicate_of": existing.get("id"),
+                    "restored": True,
+                }
+            if existing.get("status") == "READY":
                 return {**existing, "duplicate": True, "duplicate_of": existing.get("id")}
 
         document_id = str(uuid4())
@@ -246,17 +262,77 @@ async def import_park_document(
     return record
 
 
-def delete_park_document(document_id: str) -> bool:
+async def preview_park_document(
+    source_path: Path,
+    *,
+    original_name: str,
+    category: str,
+) -> dict[str, Any]:
+    """Parse and validate an upload without writing it to the document library."""
+    suffix = Path(original_name).suffix.lower()
+    if suffix not in ALLOWED_SUFFIXES:
+        raise ValueError("仅支持 PDF、DOCX、PPTX、XLSX、CSV、TXT 和 Markdown 文件")
+    if category not in ALLOWED_CATEGORIES:
+        raise ValueError("资料分类无效，请从系统支持的分类中选择")
+    parsed = await DocumentParser().parse(str(source_path))
+    if not parsed.is_valid:
+        raise ValueError(parsed.error or "文档无法解析")
+    from app.services.park_document_structuring import extract_document_structure
+
+    structured = extract_document_structure(
+        parsed.raw_text,
+        category=category,
+        source_title=original_name,
+        document_id="preview",
+    )
+    warnings: list[str] = []
+    if category == "企业资料" and not structured["enterprise_count"]:
+        warnings.append("未识别到企业记录；请使用企业名称为二级标题的纵表，或使用带“企业名称”列的 CSV/XLSX 宽表")
+    enterprises = structured.get("enterprises", [])
+    missing_credit = sum(1 for item in enterprises if not item.get("credit_code"))
+    if missing_credit:
+        warnings.append(f"{missing_credit} 家企业缺少统一社会信用代码，将使用企业名称作为临时去重键")
+    return {
+        "name": original_name,
+        "format": suffix.lstrip(".").upper(),
+        "file_size": parsed.file_size,
+        "page_count": parsed.page_count,
+        "text_length": len(parsed.raw_text),
+        "file_hash": parsed.file_hash,
+        "content_hash": _content_hash(parsed.raw_text),
+        "structured_enterprises": structured["enterprise_count"],
+        "structured_risk_events": structured["risk_event_count"],
+        "enterprise_names": [item["name"] for item in enterprises[:20]],
+        "warnings": warnings,
+    }
+
+
+def delete_park_document(document_id: str, *, archived_by: str | None = None) -> bool:
+    """Soft-delete a document so an accidental action remains recoverable."""
     with _INDEX_LOCK:
         items = _load_index()
         record = next((item for item in items if item.get("id") == document_id), None)
         if record is None:
             return False
-        suffix = "." + str(record.get("format", "")).lower()
-        (FILES_DIR / f"{document_id}{suffix}").unlink(missing_ok=True)
-        (TEXT_DIR / f"{document_id}.txt").unlink(missing_ok=True)
-        (STRUCTURED_DIR / f"{document_id}.json").unlink(missing_ok=True)
-        _save_index([item for item in items if item.get("id") != document_id])
+        record["status"] = "ARCHIVED"
+        record["archived_at"] = datetime.now(timezone.utc).isoformat()
+        record["archived_by"] = archived_by
+        _save_index(items)
+        return True
+
+
+def restore_park_document(document_id: str, *, restored_by: str | None = None) -> bool:
+    with _INDEX_LOCK:
+        items = _load_index()
+        record = next((item for item in items if item.get("id") == document_id), None)
+        if record is None or record.get("status") != "ARCHIVED":
+            return False
+        record["status"] = "READY"
+        record["restored_at"] = datetime.now(timezone.utc).isoformat()
+        record["restored_by"] = restored_by
+        record.pop("archived_at", None)
+        record.pop("archived_by", None)
+        _save_index(items)
         return True
 
 

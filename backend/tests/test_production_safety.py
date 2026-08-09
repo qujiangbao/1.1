@@ -1,7 +1,26 @@
 import pytest
 from pydantic import ValidationError
+from types import SimpleNamespace
 
 from app.config import Settings
+
+
+def _production_settings(**overrides):
+    values = {
+        "_env_file": None,
+        "app_env": "production",
+        "jwt_secret": "a-secure-random-secret-that-is-longer-than-32-characters",
+        "auth_enabled": True,
+        "admin_password": "strong-admin-password",
+        "database_enabled": True,
+        "database_url": (
+            "postgresql+asyncpg://industrial:strong-password"
+            "@postgres/industrial_park"
+        ),
+        "policy_rag_mode": "crawl4ai",
+    }
+    values.update(overrides)
+    return Settings(**values)
 
 
 def test_cors_origins_accepts_comma_separated_environment_value(monkeypatch):
@@ -77,6 +96,51 @@ def test_production_rejects_placeholder_secrets():
             admin_password="strong-admin-password",
             database_enabled=False,
         )
+
+
+def test_production_rejects_demo_mode_and_mock_sources():
+    with pytest.raises(ValidationError, match="ENABLE_DEMO_MODE"):
+        _production_settings(enable_demo_mode=True)
+    with pytest.raises(ValidationError, match="Mock enterprise data"):
+        _production_settings(enterprise_data_source="mock")
+    with pytest.raises(ValidationError, match="Mock policy retrieval"):
+        _production_settings(policy_rag_mode="mock")
+
+
+def test_data_mode_is_real_only_by_default(monkeypatch):
+    import app.core.data_mode as data_mode_module
+
+    monkeypatch.setattr(
+        data_mode_module,
+        "get_settings",
+        lambda: SimpleNamespace(app_env="development", enable_demo_mode=False),
+    )
+    assert data_mode_module.require_allowed_data_mode("real") == "real"
+    with pytest.raises(Exception) as exc_info:
+        data_mode_module.require_allowed_data_mode("demo")
+    assert exc_info.value.status_code == 403
+
+
+def test_enterprise_adapter_never_silently_falls_back_to_mock():
+    from app.tools.adapters.factory import create_adapter
+
+    base = {
+        "app_env": "development",
+        "enable_demo_mode": False,
+        "enterprise_local_json_path": "unused.json",
+        "tianyancha_api_key": "",
+        "tianyancha_base_url": "https://example.invalid",
+        "qichacha_app_key": "",
+        "qichacha_secret_key": "",
+    }
+    with pytest.raises(RuntimeError, match="TIANYANCHA_API_KEY"):
+        create_adapter(SimpleNamespace(**base, enterprise_data_source="tianyancha"))
+    with pytest.raises(RuntimeError, match="QICHACHA_APP_KEY"):
+        create_adapter(SimpleNamespace(**base, enterprise_data_source="qichacha"))
+    with pytest.raises(RuntimeError, match="not implemented"):
+        create_adapter(SimpleNamespace(**base, enterprise_data_source="government"))
+    with pytest.raises(RuntimeError, match="disabled"):
+        create_adapter(SimpleNamespace(**base, enterprise_data_source="mock"))
 
 
 def test_production_rejects_wildcard_cors_with_credentials():

@@ -49,6 +49,18 @@ export async function savePolicyConditions(
   return payload.data;
 }
 
+export async function extractPolicyConditions(policyId: string) {
+  return apiJson<{
+    success: boolean;
+    data: ManagedPolicy;
+    extracted_count: number;
+    preserved_reviewed_count: number;
+  }>(
+    `${API}/policy-management/policies/${encodeURIComponent(policyId)}/conditions/extract`,
+    { method: "POST" },
+  );
+}
+
 export async function getManagedUsers() {
   const payload = await apiJson<{ users: ManagedUser[] }>(`${API}/admin/users`);
   return payload.users;

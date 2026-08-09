@@ -224,7 +224,9 @@ async def get_policy_rag_status():
 @router.post("/investment/search")
 async def investment_search(body: dict):
     """P8: 兼容 POST /investment/search → 委托 EnterpriseDataTool"""
-    if str(body.get("data_mode", "real")).lower() == "demo":
+    from app.core.data_mode import require_allowed_data_mode
+    data_mode = require_allowed_data_mode(body.get("data_mode"))
+    if data_mode == "demo":
         from app.services.demo_scenario import (
             DEMO_DISCLAIMER,
             DEMO_INVESTMENT_TARGETS,

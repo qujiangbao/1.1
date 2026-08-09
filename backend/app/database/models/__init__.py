@@ -15,6 +15,7 @@ from app.database.models.investment import (
     InvestmentScenario,
     RecommendationExposure,
 )
+from app.database.models.operations import ServiceTicket
 
 __all__ = [
     "Enterprise", "EnterpriseProfile", "Industry", "Policy", "PolicyDocument", "PolicyChunk", "Risk",
@@ -24,4 +25,5 @@ __all__ = [
     "InvestmentScenario", "InvestmentCandidate", "CandidateFeedback", "CandidateAudit",
     "InvestmentCRMEvent", "InvestmentFollowUpTask",
     "RecommendationExposure",
+    "ServiceTicket",
 ]

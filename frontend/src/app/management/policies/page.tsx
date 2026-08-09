@@ -27,6 +27,7 @@ import {
 import {
   getManagedPolicies,
   getPolicyCandidateEligibility,
+  extractPolicyConditions,
   savePolicyConditions,
 } from "@/api/management.api";
 import PageHeader from "@/components/layout/PageHeader";
@@ -106,6 +107,7 @@ export default function PolicyManagementPage() {
   const [policyView, setPolicyView] = useState<"ELIGIBILITY" | "REFERENCE" | "ALL">("ELIGIBILITY");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [extracting, setExtracting] = useState(false);
   const [selected, setSelected] = useState<ManagedPolicy | null>(null);
   const [conditionsJson, setConditionsJson] = useState("");
   const [eligibilityPolicy, setEligibilityPolicy] = useState<ManagedPolicy | null>(null);
@@ -173,6 +175,25 @@ export default function PolicyManagementPage() {
       message.error(reason instanceof Error ? reason.message : "保存失败");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const extractFromSource = async () => {
+    if (!selected) return;
+    setExtracting(true);
+    try {
+      const result = await extractPolicyConditions(selected.policy_id);
+      setSelected(result.data);
+      setConditionsJson(JSON.stringify(result.data.eligibility_conditions, null, 2));
+      if (result.extracted_count) {
+        message.success(`已从政策原文提取 ${result.extracted_count} 条草稿，请核对后逐条改为 REVIEWED`);
+      } else {
+        message.info("原文中未识别到可安全结构化的明确条件，未生成任何规则");
+      }
+    } catch (reason) {
+      message.error(reason instanceof Error ? reason.message : "政策原文规则提取失败");
+    } finally {
+      setExtracting(false);
     }
   };
 
@@ -369,6 +390,7 @@ export default function PolicyManagementPage() {
         maskClosable={!saving}
         footer={(_, { OkBtn, CancelBtn }) => (
           <Space>
+            <Button loading={extracting} onClick={() => void extractFromSource()}>从政策原文提取草稿</Button>
             <Button icon={<FormatPainterOutlined />} onClick={formatConditions}>格式化并检查</Button>
             <CancelBtn />
             <OkBtn />

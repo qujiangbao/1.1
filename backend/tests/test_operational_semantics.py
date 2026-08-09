@@ -72,7 +72,8 @@ def test_enterprise_service_is_advice_only_without_fake_ticket():
     assert response["service_category"] == "space_service"
     assert response["ticket_created"] is False
     assert response["ticket_id"] is None
-    assert "正式企业服务工单系统" in response["notice"]
+    assert "正式企业服务工单工作台" in response["notice"]
+    assert "用户明确提交" in response["notice"]
 
 
 def test_enterprise_service_capabilities_do_not_claim_ticket_management():

@@ -200,6 +200,18 @@ def evaluate_policy_conditions(
             continue
 
         actual = getattr(profile, profile_field, None)
+        if field == "industry":
+            # Industry qualification is commonly evidenced by the normalized
+            # industry, explicit business scope and imported enterprise tags.
+            actual = " ".join(
+                str(value or "").strip()
+                for value in (
+                    profile.industry,
+                    profile.business_scope,
+                    " ".join(profile.tags or []),
+                )
+                if value
+            )
         comparison = _compare(actual, operator, expected)
         if comparison is None or not enterprise_evidence_ids:
             status = "UNKNOWN"

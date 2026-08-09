@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.database.session as database_session
 from app.core.permissions import require_any_role
+from app.core.data_mode import require_allowed_data_mode
 from app.core.security import UserContext, create_stream_token, require_user
 from app.database.models.investment import InvestmentScenario
 from app.schemas.investment_candidate import (
@@ -87,6 +88,7 @@ async def create_investment_scenario(
     session: AsyncSession = Depends(investment_db),
     user: UserContext = Depends(require_any_role(*WRITE_ROLES)),
 ):
+    require_allowed_data_mode(body.data_mode)
     scenario = await create_scenario(session, body, user_id=user.user_id)
     stream_token = (
         create_stream_token(scenario.source_task_id, user.user_id)
@@ -165,6 +167,7 @@ async def post_recommendation_exposures(
     session: AsyncSession = Depends(investment_db),
     user: UserContext = Depends(require_user),
 ):
+    require_allowed_data_mode(body.data_mode)
     created = await record_recommendation_exposures(
         session,
         scenario_id,
@@ -182,6 +185,7 @@ async def get_offline_learning_report(
         require_any_role("super_admin", "park_manager", "investment_manager")
     ),
 ):
+    data_mode = require_allowed_data_mode(data_mode)
     report = await build_offline_learning_report(
         session,
         data_mode=data_mode,
@@ -196,6 +200,7 @@ async def add_investment_candidate(
     session: AsyncSession = Depends(investment_db),
     user: UserContext = Depends(require_any_role(*WRITE_ROLES)),
 ):
+    require_allowed_data_mode(body.data_mode)
     candidate, created = await create_candidate(
         session,
         body,
@@ -220,6 +225,7 @@ async def get_investment_candidates(
     session: AsyncSession = Depends(investment_db),
     _user: UserContext = Depends(require_user),
 ):
+    data_mode = require_allowed_data_mode(data_mode)
     result = await list_candidates(
         session,
         data_mode=data_mode,
@@ -279,6 +285,7 @@ async def post_investment_crm_event(
     session: AsyncSession = Depends(investment_db),
     user: UserContext = Depends(require_any_role(*WRITE_ROLES)),
 ):
+    require_allowed_data_mode(body.data_mode)
     event = await create_crm_event(session, body, user_id=user.user_id)
     return {
         "success": True,
@@ -294,6 +301,7 @@ async def get_investment_crm_events(
     session: AsyncSession = Depends(investment_db),
     _user: UserContext = Depends(require_user),
 ):
+    data_mode = require_allowed_data_mode(data_mode)
     events = await list_crm_events(
         session,
         data_mode=data_mode,
@@ -315,6 +323,7 @@ async def get_real_investment_funnel(
     session: AsyncSession = Depends(investment_db),
     _user: UserContext = Depends(require_user),
 ):
+    data_mode = require_allowed_data_mode(data_mode)
     funnel = await get_investment_funnel(session, data_mode=data_mode)
     return {"success": True, "data": funnel.model_dump(mode="json")}
 
@@ -325,6 +334,7 @@ async def post_investment_follow_up_task(
     session: AsyncSession = Depends(investment_db),
     user: UserContext = Depends(require_any_role(*WRITE_ROLES)),
 ):
+    require_allowed_data_mode(body.data_mode)
     task = await create_follow_up_task(session, body, user_id=user.user_id)
     return {
         "success": True,
@@ -342,6 +352,7 @@ async def get_investment_follow_up_tasks(
     session: AsyncSession = Depends(investment_db),
     _user: UserContext = Depends(require_user),
 ):
+    data_mode = require_allowed_data_mode(data_mode)
     tasks = await list_follow_up_tasks(
         session,
         data_mode=data_mode,

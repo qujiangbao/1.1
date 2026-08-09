@@ -64,7 +64,7 @@ class ToolGateway:
             "enterprise_risk_events":  self._enterprise_risk_events,
             "enterprise_business_status": self._enterprise_business_status,
             "investment_scoring":      self._enterprise_scoring,
-            # === 其他工具（暂保持 mock） ===
+            # === 未接入工具：生产中明确失败，不返回伪造成功 ===
             "risk_scoring":            self._mock("risk_scoring"),
             "risk_history":            self._mock("risk_history"),
             # === P1: KnowledgeTool 替换 Mock 政策搜索 ===
@@ -75,6 +75,8 @@ class ToolGateway:
             "industry_query":          self._mock("industry_query"),
             "industry_vector_search":  self._mock("industry_vector_search"),
             "knowledge_graph_query":   self._mock("knowledge_graph_query"),
+            # Ticket writes and reads go through the authenticated REST API;
+            # the synchronous Agent gateway intentionally cannot bypass RBAC.
             "service_ticket_query":    self._mock("service_ticket_query"),
             "dashboard_query":         self._mock("dashboard_query"),
             "metric_query":            self._mock("metric_query"),
@@ -169,13 +171,14 @@ class ToolGateway:
     # ═══ 原始 Mock 方法（保留兼容，迁移到 adapters/mock.py） ═══
 
     def _mock(self, name: str):
-        """临时 mock 工具（数据库就绪后替换为真实实现）"""
+        """Fail closed for capabilities that do not have a real connector."""
         def handler(params: Dict) -> Dict:
             return {
-                "status": "success",
+                "status": "error",
                 "tool": name,
                 "params": params,
-                "result": {"message": f"Tool {name} executed (mock)"},
+                "error": f"Tool {name} is not connected to a production data source",
+                "result": None,
             }
         return handler
 

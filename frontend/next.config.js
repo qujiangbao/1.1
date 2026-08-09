@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  poweredByHeader: false,
   transpilePackages: ['antd', '@ant-design/icons'],
   output: 'standalone',
   async headers() {

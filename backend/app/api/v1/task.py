@@ -4,6 +4,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from app.core.security import UserContext, require_task_owner, require_user
 from app.schemas.agent import ChatRequest
+from app.core.data_mode import require_allowed_data_mode
 
 router = APIRouter()
 
@@ -67,6 +68,7 @@ async def agent_daily_report(
 ):
     """Return today's public-snapshot or isolated demo metrics."""
     from app.services.dashboard_service import get_daily_report
+    mode = require_allowed_data_mode(mode)
     return {
         "success": True,
         "data": await get_daily_report(mode=mode),
