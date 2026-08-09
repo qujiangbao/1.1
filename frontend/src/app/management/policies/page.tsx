@@ -42,7 +42,7 @@ const { Paragraph, Text } = Typography;
 
 const MATCH_LABELS = {
   ELIGIBLE: "已确认符合",
-  POTENTIALLY_ELIGIBLE: "初步符合",
+  POTENTIALLY_ELIGIBLE: "部分满足 · 待补证",
   INELIGIBLE: "已确认不符合",
   RELATED: "仅相关",
   UNKNOWN: "待核验",
@@ -72,9 +72,6 @@ function readableValue(value: unknown) {
 }
 
 function enterpriseMatchDisplay(item: PolicyCandidateEligibilityItem) {
-  if (item.decision_basis === "PRELIMINARY" && item.preliminary_outcome === "NO_MATCH") {
-    return { label: "初步不符合", color: "orange" } as const;
-  }
   if (item.preliminary_outcome === "INSUFFICIENT") {
     return { label: "待补资料", color: "default" } as const;
   }
@@ -86,13 +83,7 @@ function enterpriseMatchDisplay(item: PolicyCandidateEligibilityItem) {
 
 function conditionDisplay(condition: PolicyCandidateEligibilityItem["condition_results"][number]) {
   if (condition.status === "NEEDS_MANUAL_REVIEW") {
-    if (condition.preview_status === "SATISFIED") {
-      return { label: "预匹配满足", color: "processing" } as const;
-    }
-    if (condition.preview_status === "UNSATISFIED") {
-      return { label: "预匹配不满足", color: "orange" } as const;
-    }
-    return { label: "待补证/规则待复核", color: "warning" } as const;
+    return { label: "规则待审核", color: "warning" } as const;
   }
   return {
     label: CONDITION_LABELS[condition.status],
@@ -104,19 +95,6 @@ function conditionDisplay(condition: PolicyCandidateEligibilityItem["condition_r
           : "warning",
   } as const;
 }
-
-const CONDITION_TEMPLATE: ManagedPolicyCondition[] = [
-  {
-    condition_code: "REGISTERED_REGION",
-    label: "注册地要求",
-    field: "region",
-    operator: "IN",
-    expected_value: ["广州"],
-    mandatory: true,
-    review_status: "REVIEWED",
-    source_text: "粘贴政策原文中的对应申报条件",
-  },
-];
 
 export default function PolicyManagementPage() {
   const { canAccess } = useUserContext();
@@ -170,13 +148,7 @@ export default function PolicyManagementPage() {
   const openEditor = (policy: ManagedPolicy) => {
     setSelected(policy);
     setConditionsJson(
-      JSON.stringify(
-        policy.eligibility_conditions.length
-          ? policy.eligibility_conditions
-          : CONDITION_TEMPLATE,
-        null,
-        2,
-      ),
+      JSON.stringify(policy.eligibility_conditions, null, 2),
     );
   };
 
@@ -256,7 +228,6 @@ export default function PolicyManagementPage() {
         const reviewed = record.eligibility_conditions.filter(
           (condition) => condition.review_status === "REVIEWED",
         ).length;
-        const isTemplate = record.conditions_reviewed_by === "template_suggestion";
         if (record.eligibility_mode !== "ELIGIBILITY") {
           return (
             <Space direction="vertical" size={2}>
@@ -265,10 +236,18 @@ export default function PolicyManagementPage() {
             </Space>
           );
         }
+        if (!record.eligibility_conditions.length) {
+          return (
+            <Space direction="vertical" size={2}>
+              <Tag>尚无资格规则</Tag>
+              <Text type="secondary">需从政策原文提取并审核</Text>
+            </Space>
+          );
+        }
         return (
           <Space direction="vertical" size={2}>
-            <Tag color={reviewed && !isTemplate ? "success" : "processing"}>
-              {reviewed && !isTemplate ? "自动匹配 · 规则已确认" : "自动预匹配 · 规则待复核"}
+            <Tag color={reviewed ? "success" : "warning"}>
+              {reviewed ? "按已审核原文规则匹配" : "规则待审核 · 不参与匹配"}
             </Tag>
             <Text type="secondary">
               {reviewed}/{record.eligibility_conditions.length} 条规则已人工确认
@@ -292,7 +271,13 @@ export default function PolicyManagementPage() {
           <Button
             type="primary"
             icon={<TeamOutlined />}
-            disabled={record.eligibility_mode !== "ELIGIBILITY"}
+            disabled={
+              record.eligibility_mode !== "ELIGIBILITY"
+              || !record.eligibility_conditions.some(
+                (condition) => condition.review_status === "REVIEWED" && Boolean(condition.source_text?.trim()),
+              )
+            }
+            title="仅已引用政策原文并完成人工审核的规则可用于企业匹配"
             onClick={() => void openEligibility(record)}
           >
             查看匹配企业
@@ -313,14 +298,14 @@ export default function PolicyManagementPage() {
     <div>
       <PageHeader
         title="惠企政策库"
-        description="企业资料导入后自动参与政策预匹配；从政策反查具体企业、匹配条件和证据缺口。"
+        description="企业资料导入后按已审核的政策原文规则自动匹配；从政策反查具体企业、匹配条件和证据缺口。"
         extra={canUpdatePolicies ? <Button href="/management/policy-updates" icon={<SyncOutlined />}>政策更新中心</Button> : undefined}
       />
       <Alert
         type="info"
         showIcon
-        message="不需要逐条审核全部政策，也不需要逐家审核企业"
-        description="系统会读取园区企业目录（含新导入资料）并自动预匹配。点击“查看匹配企业”可查看谁初步符合、为什么符合以及缺少什么证据；管理员只需在需要正式资格结论时治理政策规则。公示、征求意见、采购和结果类文件仅供检索，不显示资格匹配。"
+        message="资格匹配只使用政策原文规则，不再套用通用示例条件"
+        description="管理员先核对政策原文中的申报条件；审核通过后，系统会自动匹配园区企业目录（含新导入资料）。没有原文规则或规则仍为草稿时不执行资格匹配。公示、征求意见、采购和结果类文件仅供检索。"
         style={{ marginBottom: 16 }}
       />
       {error && (
@@ -391,7 +376,7 @@ export default function PolicyManagementPage() {
         )}
       >
         <Paragraph type="secondary">
-          这里审核的是 AI 从政策原文提取的规则，不是逐家审核企业。规则为 DRAFT 时系统仍会自动预匹配，但只显示“初步”结论；改为 REVIEWED 后才允许输出确定性资格结果。
+          这里审核的是从政策原文提取的规则，不是逐家审核企业。DRAFT 规则完全不参与企业匹配；只有填写对应政策原文并改为 REVIEWED 后才会用于资格判断。
         </Paragraph>
         <Paragraph type="secondary">
           每项需包含 condition_code、label、field、operator、mandatory、
@@ -418,20 +403,23 @@ export default function PolicyManagementPage() {
         ) : eligibilityReport ? (
           <>
             <Alert
-              type={eligibilityReport.reviewed_condition_count ? "info" : "warning"}
+              type={eligibilityReport.match_supported ? "info" : "warning"}
               showIcon
-              message={`自动匹配范围：园区企业目录 ${eligibilityReport.scope_enterprise_count} 家；已计算 ${eligibilityReport.evaluated_enterprise_count} 家`}
+              message={
+                eligibilityReport.match_supported
+                  ? `自动匹配范围：园区企业目录 ${eligibilityReport.scope_enterprise_count} 家；已计算 ${eligibilityReport.evaluated_enterprise_count} 家`
+                  : "未执行企业资格匹配"
+              }
               description={
-                eligibilityReport.reviewed_condition_count
-                  ? `当前共 ${eligibilityReport.condition_count} 条政策规则，其中 ${eligibilityReport.reviewed_condition_count} 条已人工确认。已确认规则可输出正式结论，其余规则继续显示自动预匹配结果。`
-                  : "当前规则尚未人工确认，但系统已使用导入的企业字段和证据完成自动预匹配；结果明确标记为“初步”，不会冒充正式资格结论。"
+                eligibilityReport.match_supported
+                  ? `仅使用 ${eligibilityReport.reviewed_condition_count} 条已引用政策原文并经人工审核的规则；草稿规则不参与计算。`
+                  : eligibilityReport.match_unavailable_reason || "尚无可用于资格匹配的已审核政策原文规则。"
               }
               style={{ marginBottom: 14 }}
             />
             <Space wrap style={{ marginBottom: 14 }}>
               <Tag color="success">已确认符合 {eligibilityReport.eligible_count} 家</Tag>
-              <Tag color="processing">初步符合 {eligibilityReport.potential_count} 家</Tag>
-              <Tag color="orange">初步不符合 {eligibilityReport.preliminary_ineligible_count} 家</Tag>
+              <Tag color="processing">部分满足 · 待补证 {eligibilityReport.potential_count} 家</Tag>
               <Tag color="error">已确认不符合 {eligibilityReport.ineligible_count} 家</Tag>
               <Tag>待补资料 {eligibilityReport.insufficient_count} 家</Tag>
             </Space>

@@ -4,7 +4,15 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+DISALLOWED_POLICY_SOURCE_MARKERS = (
+    "系统模板建议",
+    "非政策原文",
+    "通用示例规则",
+    "粘贴政策原文中的对应申报条件",
+)
 
 
 class ManagedPolicyCondition(BaseModel):
@@ -26,6 +34,15 @@ class ManagedPolicyCondition(BaseModel):
     mandatory: bool = True
     review_status: Literal["DRAFT", "REVIEWED"] = "DRAFT"
     source_text: str | None = Field(default=None, max_length=4000)
+
+    @model_validator(mode="after")
+    def validate_policy_source(self):
+        source_text = (self.source_text or "").strip()
+        if any(marker in source_text for marker in DISALLOWED_POLICY_SOURCE_MARKERS):
+            raise ValueError("资格规则不得使用系统模板或非政策原文作为依据")
+        if self.review_status == "REVIEWED" and not source_text:
+            raise ValueError("审核通过的资格规则必须填写对应政策原文")
+        return self
 
 
 class PolicyConditionsUpdate(BaseModel):

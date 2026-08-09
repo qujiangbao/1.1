@@ -63,7 +63,6 @@ export interface PolicyCandidateConditionResult {
   reason: string;
   source_text?: string | null;
   rule_review_status?: "DRAFT" | "REVIEWED" | null;
-  preview_status?: "SATISFIED" | "UNSATISFIED" | "UNKNOWN" | null;
 }
 
 export interface PolicyCandidateEligibilityItem {
@@ -94,7 +93,6 @@ export interface PolicyCandidateEligibilityReport {
   relevant_enterprise_count: number;
   eligible_count: number;
   potential_count: number;
-  preliminary_ineligible_count: number;
   ineligible_count: number;
   insufficient_count: number;
   condition_count: number;
@@ -103,6 +101,7 @@ export interface PolicyCandidateEligibilityReport {
   match_supported: boolean;
   applicability_mode: ManagedPolicy["eligibility_mode"];
   applicability_reason: string;
+  match_unavailable_reason?: string | null;
   items: PolicyCandidateEligibilityItem[];
 }
 

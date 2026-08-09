@@ -1,5 +1,7 @@
-import pytest
 from types import SimpleNamespace
+
+import pytest
+from pydantic import ValidationError
 
 from app.agents.registry import AGENT_REGISTRY
 from app.agents.executor import _summary
@@ -12,6 +14,7 @@ from app.api.v1.policy_management import (
 )
 from app.services.policy_applicability_service import classify_policy_applicability
 from app.schemas.enterprise import EnterpriseProfile
+from app.schemas.policy_management import ManagedPolicyCondition
 from app.services.park_document_service import _query_terms
 
 
@@ -160,7 +163,7 @@ def test_policy_candidate_result_explains_who_and_how():
     assert item["condition_results"][0]["actual_value"] == "广州"
 
 
-def test_draft_policy_condition_shows_actual_value_without_claiming_eligibility():
+def test_draft_policy_condition_is_not_compared_with_enterprise_data():
     candidate = SimpleNamespace(
         id="candidate-2",
         enterprise_id="ENT-2",
@@ -189,17 +192,18 @@ def test_draft_policy_condition_shows_actual_value_without_claiming_eligibility(
             "expected_value": ["广州"],
             "mandatory": True,
             "review_status": "DRAFT",
-            "source_text": "系统模板建议（非政策原文）",
+            "source_text": "申报单位应当在广州市依法登记",
         }],
         {"match_score": 70, "matched_terms": ["机器人"]},
     )
 
     assert item["match_type"] == "UNKNOWN"
     assert item["condition_results"][0]["status"] == "NEEDS_MANUAL_REVIEW"
-    assert item["condition_results"][0]["actual_value"] == "广州黄埔"
+    assert item["condition_results"][0]["actual_value"] is None
+    assert "不参与企业资格匹配" in item["condition_results"][0]["reason"]
 
 
-def test_full_catalog_preview_uses_imported_enterprise_evidence():
+def test_full_catalog_matching_uses_reviewed_rule_and_imported_evidence():
     profile = EnterpriseProfile(
         enterprise_id="ENT-IMPORTED-1",
         name="园区导入机器人企业",
@@ -223,18 +227,60 @@ def test_full_catalog_preview_uses_imported_enterprise_evidence():
             "operator": "CONTAINS",
             "expected_value": ["广州"],
             "mandatory": True,
-            "review_status": "DRAFT",
+            "review_status": "REVIEWED",
             "source_text": "企业注册地应在广州",
         }],
     )
 
     assert item["candidate_id"] is None
     assert item["enterprise_name"] == "园区导入机器人企业"
-    assert item["match_type"] == "POTENTIALLY_ELIGIBLE"
-    assert item["decision_basis"] == "PRELIMINARY"
+    assert item["match_type"] == "ELIGIBLE"
+    assert item["decision_basis"] == "CONFIRMED"
     assert item["preliminary_outcome"] == "MATCH"
-    assert item["condition_results"][0]["preview_status"] == "SATISFIED"
+    assert item["condition_results"][0]["status"] == "SATISFIED"
     assert item["evidence_count"] == 1
+
+
+def test_demo_policy_condition_is_ignored_completely():
+    profile = EnterpriseProfile(
+        enterprise_id="ENT-DEMO-1",
+        name="模板命中企业",
+        location="广州",
+        data_source="test",
+        evidence=[{"type": "source", "value": "企业资料"}],
+    )
+    item = _enterprise_eligibility_item(
+        profile,
+        "policy-demo-1",
+        [{
+            "condition_code": "REGISTERED_REGION",
+            "label": "注册地要求",
+            "field": "region",
+            "operator": "CONTAINS",
+            "expected_value": ["广州"],
+            "mandatory": True,
+            "review_status": "REVIEWED",
+            "source_text": "系统模板建议（非政策原文）：企业注册地须在广州",
+        }],
+    )
+
+    assert item["match_type"] == "RELATED"
+    assert item["preliminary_outcome"] == "INSUFFICIENT"
+    assert item["condition_results"] == []
+
+
+def test_reviewed_condition_requires_real_policy_source_text():
+    with pytest.raises(ValidationError):
+        ManagedPolicyCondition(
+            condition_code="REGISTERED_REGION",
+            label="注册地要求",
+            field="region",
+            operator="CONTAINS",
+            expected_value=["广州"],
+            mandatory=True,
+            review_status="REVIEWED",
+            source_text="系统模板建议（非政策原文）：企业注册地须在广州",
+        )
 
 
 @pytest.mark.parametrize(

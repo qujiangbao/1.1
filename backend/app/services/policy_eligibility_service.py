@@ -28,6 +28,54 @@ SUPPORTED_FIELDS = {
     "credit_code": "credit_code",
 }
 
+DEMO_RULE_SOURCE_MARKERS = (
+    "系统模板建议",
+    "非政策原文",
+    "通用示例规则",
+    "粘贴政策原文中的对应申报条件",
+)
+
+
+def is_demo_policy_condition(requirement: dict[str, Any]) -> bool:
+    """Identify legacy qualification templates that have no policy basis."""
+
+    source_text = str(requirement.get("source_text") or "")
+    return any(marker in source_text for marker in DEMO_RULE_SOURCE_MARKERS)
+
+
+def is_reviewed_source_condition(requirement: dict[str, Any]) -> bool:
+    """Return whether a rule may participate in eligibility matching."""
+
+    return (
+        str(requirement.get("review_status") or "").upper() == "REVIEWED"
+        and bool(str(requirement.get("source_text") or "").strip())
+        and not is_demo_policy_condition(requirement)
+    )
+
+
+def source_policy_conditions(
+    requirements: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Remove legacy demo rules from policy-management and Agent inputs."""
+
+    return [
+        requirement
+        for requirement in requirements
+        if isinstance(requirement, dict) and not is_demo_policy_condition(requirement)
+    ]
+
+
+def reviewed_source_policy_conditions(
+    requirements: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Select only reviewed rules that quote the source policy text."""
+
+    return [
+        requirement
+        for requirement in requirements
+        if isinstance(requirement, dict) and is_reviewed_source_condition(requirement)
+    ]
+
 
 def _normal(value: Any) -> str:
     return " ".join(str(value or "").strip().lower().split())
@@ -77,15 +125,10 @@ def evaluate_policy_conditions(
     *,
     enterprise_evidence_ids: list[str],
     policy_evidence_id: str,
-    allow_draft_preview: bool = False,
 ) -> tuple[PolicyEligibilityStatus, list[PolicyConditionResult], str]:
-    """Evaluate conditions and optionally expose a non-authoritative preview.
+    """Evaluate source-backed rules without comparing draft or demo rules."""
 
-    Draft comparisons never become a confirmed eligibility decision.  The
-    preview is used by the policy management screen so newly imported
-    enterprise evidence can participate immediately while the policy rule is
-    still waiting for an administrator to verify it against the source text.
-    """
+    requirements = source_policy_conditions(requirements)
 
     if not requirements:
         return (
@@ -107,34 +150,9 @@ def evaluate_policy_conditions(
         expected = requirement.get("expected_value", requirement.get("value"))
         mandatory = bool(requirement.get("mandatory", True))
         source_text = requirement.get("source_text")
-        review_status = str(requirement.get("review_status") or "").upper()
         profile_field = SUPPORTED_FIELDS.get(field)
 
-        if review_status != "REVIEWED":
-            actual = getattr(profile, profile_field, None) if profile_field else None
-            comparison = (
-                _compare(actual, operator, expected)
-                if profile_field and operator in {
-                    "EXISTS", "EQ", "NE", "IN", "CONTAINS",
-                    "GTE", "GT", "LTE", "LT",
-                }
-                else None
-            )
-            preview_status = (
-                "SATISFIED"
-                if comparison is True and enterprise_evidence_ids
-                else "UNSATISFIED"
-                if comparison is False and enterprise_evidence_ids
-                else "UNKNOWN"
-            )
-            if allow_draft_preview and preview_status == "SATISFIED":
-                reason = "自动预匹配：企业字段满足待复核规则；规则确认前不作为正式资格结论"
-            elif allow_draft_preview and preview_status == "UNSATISFIED":
-                reason = "自动预匹配：企业字段不满足待复核规则；规则确认前不作为正式排除结论"
-            elif allow_draft_preview:
-                reason = "自动预匹配缺少企业字段或证据，且政策规则仍待人工复核"
-            else:
-                reason = "政策条件尚未经过人工复核"
+        if not is_reviewed_source_condition(requirement):
             results.append(
                 PolicyConditionResult(
                     condition_code=code,
@@ -142,17 +160,13 @@ def evaluate_policy_conditions(
                     field=field,
                     operator=operator,
                     expected_value=expected,
-                    actual_value=actual,
+                    actual_value=None,
                     status="NEEDS_MANUAL_REVIEW",
                     mandatory=mandatory,
-                    reason=reason,
+                    reason="规则尚未引用政策原文并完成人工审核，不参与企业资格匹配",
                     source_text=source_text,
-                    evidence_ids=list(dict.fromkeys([
-                        policy_evidence_id,
-                        *(enterprise_evidence_ids if comparison is not None else []),
-                    ])),
+                    evidence_ids=[policy_evidence_id],
                     rule_review_status="DRAFT",
-                    preview_status=preview_status,
                 )
             )
             continue
@@ -181,7 +195,6 @@ def evaluate_policy_conditions(
                     source_text=source_text,
                     evidence_ids=[policy_evidence_id],
                     rule_review_status="REVIEWED",
-                    preview_status="UNKNOWN",
                 )
             )
             continue
@@ -228,39 +241,6 @@ def evaluate_policy_conditions(
         item.status == "SATISFIED" for item in mandatory_results
     ):
         return "ELIGIBLE", results, "全部已复核强制条件均有企业证据支持"
-    if allow_draft_preview:
-        if any(
-            item.rule_review_status == "DRAFT"
-            and item.preview_status == "UNSATISFIED"
-            for item in mandatory_results
-        ):
-            return (
-                "UNKNOWN",
-                results,
-                "按待复核规则自动预匹配为初步不符合；规则确认前不作正式排除",
-            )
-        if mandatory_results and all(
-            item.status == "SATISFIED"
-            or (
-                item.rule_review_status == "DRAFT"
-                and item.preview_status == "SATISFIED"
-            )
-            for item in mandatory_results
-        ):
-            return (
-                "POTENTIALLY_ELIGIBLE",
-                results,
-                "自动预匹配满足全部现有条件；待政策规则复核后可确认资格",
-            )
-        if any(
-            item.status == "SATISFIED" or item.preview_status == "SATISFIED"
-            for item in mandatory_results
-        ):
-            return (
-                "POTENTIALLY_ELIGIBLE",
-                results,
-                "自动预匹配满足部分条件，其余条件需要补充企业证据或复核规则",
-            )
     if any(item.status == "SATISFIED" for item in mandatory_results):
         return (
             "POTENTIALLY_ELIGIBLE",

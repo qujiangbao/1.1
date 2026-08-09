@@ -17,6 +17,10 @@ from app.schemas.policy_management import (
     PolicyConditionsUpdate,
 )
 from app.services.policy_applicability_service import classify_policy_applicability
+from app.services.policy_eligibility_service import (
+    reviewed_source_policy_conditions,
+    source_policy_conditions,
+)
 
 
 router = APIRouter()
@@ -25,6 +29,12 @@ WRITE_ROLES = ("super_admin", "park_manager", "policy_manager")
 
 def _managed_policy_dump(policy: Policy) -> dict:
     payload = ManagedPolicyRead.model_validate(policy).model_dump(mode="json")
+    payload["eligibility_conditions"] = source_policy_conditions(
+        payload["eligibility_conditions"]
+    )
+    if policy.conditions_reviewed_by in {"template_suggestion", "seed_policy_conditions"}:
+        payload["conditions_reviewed_at"] = None
+        payload["conditions_reviewed_by"] = None
     mode, reason = classify_policy_applicability(policy)
     payload["eligibility_mode"] = mode
     payload["eligibility_mode_reason"] = reason
@@ -96,23 +106,16 @@ def _enterprise_eligibility_item(
         conditions,
         enterprise_evidence_ids=enterprise_evidence_ids,
         policy_evidence_id=f"policy-{policy_id}",
-        allow_draft_preview=True,
     )
     mandatory = [item for item in condition_results if item.mandatory]
     positive = [
         item for item in mandatory
-        if item.status == "SATISFIED" or item.preview_status == "SATISFIED"
+        if item.status == "SATISFIED"
     ]
     known = [
         item for item in mandatory
         if item.status in {"SATISFIED", "UNSATISFIED"}
-        or item.preview_status in {"SATISFIED", "UNSATISFIED"}
     ]
-    preview_has_mismatch = any(
-        item.rule_review_status == "DRAFT"
-        and item.preview_status == "UNSATISFIED"
-        for item in mandatory
-    )
     if match_type == "ELIGIBLE":
         preliminary_outcome = "MATCH"
         decision_basis = "CONFIRMED"
@@ -121,9 +124,6 @@ def _enterprise_eligibility_item(
         decision_basis = "CONFIRMED"
     elif match_type == "POTENTIALLY_ELIGIBLE":
         preliminary_outcome = "MATCH"
-        decision_basis = "PRELIMINARY"
-    elif preview_has_mismatch:
-        preliminary_outcome = "NO_MATCH"
         decision_basis = "PRELIMINARY"
     else:
         preliminary_outcome = "INSUFFICIENT"
@@ -218,9 +218,15 @@ async def update_policy_conditions(
         condition.model_dump(mode="json")
         for condition in body.conditions
     ]
+    reviewed_conditions = reviewed_source_policy_conditions(conditions)
+    reviewed_at = (
+        datetime.now(timezone.utc).replace(tzinfo=None)
+        if reviewed_conditions
+        else None
+    )
     policy.eligibility_conditions = conditions
-    policy.conditions_reviewed_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    policy.conditions_reviewed_by = user.user_id
+    policy.conditions_reviewed_at = reviewed_at
+    policy.conditions_reviewed_by = user.user_id if reviewed_conditions else None
 
     chunks = list(
         (
@@ -233,8 +239,8 @@ async def update_policy_conditions(
         chunk.metadata_ = {
             **(chunk.metadata_ or {}),
             "requirements": conditions,
-            "conditions_reviewed_at": policy.conditions_reviewed_at.isoformat(),
-            "conditions_reviewed_by": user.user_id,
+            "conditions_reviewed_at": reviewed_at.isoformat() if reviewed_at else None,
+            "conditions_reviewed_by": user.user_id if reviewed_conditions else None,
         }
     await session.commit()
     await session.refresh(policy)
@@ -248,22 +254,29 @@ async def update_policy_conditions(
 @router.get("/policy-management/policies/{policy_id}/candidate-eligibility")
 async def list_policy_candidate_eligibility(
     policy_id: str,
-    data_mode: str = Query(default="real", pattern="^(real|demo)$"),
+    data_mode: str = Query(default="real", pattern="^real$"),
     session: AsyncSession = Depends(investment_db),
     _user: UserContext = Depends(require_user),
 ):
-    """Reverse lookup across the full enterprise catalog, including imports."""
+    """Match reviewed, source-backed rules against the real enterprise catalog."""
 
     policy = await session.get(Policy, policy_id)
     if policy is None:
         raise HTTPException(status_code=404, detail="Policy not found")
 
-    conditions = [
+    stored_conditions = [
         item for item in (policy.eligibility_conditions or [])
         if isinstance(item, dict)
     ]
+    source_conditions = source_policy_conditions(stored_conditions)
+    conditions = reviewed_source_policy_conditions(source_conditions)
     applicability_mode, applicability_reason = classify_policy_applicability(policy)
-    if applicability_mode != "ELIGIBILITY":
+    if applicability_mode != "ELIGIBILITY" or not conditions:
+        unavailable_reason = (
+            applicability_reason
+            if applicability_mode != "ELIGIBILITY"
+            else "尚无引用政策原文并经人工审核的资格规则，未执行企业匹配"
+        )
         return {
             "success": True,
             "data": {
@@ -276,15 +289,15 @@ async def list_policy_candidate_eligibility(
                 "relevant_enterprise_count": 0,
                 "eligible_count": 0,
                 "potential_count": 0,
-                "preliminary_ineligible_count": 0,
                 "ineligible_count": 0,
                 "insufficient_count": 0,
-                "condition_count": len(conditions),
-                "reviewed_condition_count": 0,
+                "condition_count": len(source_conditions),
+                "reviewed_condition_count": len(conditions),
                 "conditions_origin": policy.conditions_reviewed_by,
                 "match_supported": False,
                 "applicability_mode": applicability_mode,
                 "applicability_reason": applicability_reason,
+                "match_unavailable_reason": unavailable_reason,
                 "items": [],
             },
         }
@@ -311,11 +324,6 @@ async def list_policy_candidate_eligibility(
         -(item.get("match_score") or 0),
         item["enterprise_name"],
     ))
-    preliminary_ineligible_count = sum(
-        item["decision_basis"] == "PRELIMINARY"
-        and item["preliminary_outcome"] == "NO_MATCH"
-        for item in items
-    )
     insufficient_count = sum(
         item["preliminary_outcome"] == "INSUFFICIENT" for item in items
     )
@@ -334,18 +342,15 @@ async def list_policy_candidate_eligibility(
                 item["match_type"] == "POTENTIALLY_ELIGIBLE"
                 for item in items
             ),
-            "preliminary_ineligible_count": preliminary_ineligible_count,
             "ineligible_count": sum(item["match_type"] == "INELIGIBLE" for item in items),
             "insufficient_count": insufficient_count,
-            "condition_count": len(conditions),
-            "reviewed_condition_count": sum(
-                str(item.get("review_status") or "").upper() == "REVIEWED"
-                for item in conditions
-            ),
+            "condition_count": len(source_conditions),
+            "reviewed_condition_count": len(conditions),
             "conditions_origin": policy.conditions_reviewed_by,
             "match_supported": True,
             "applicability_mode": applicability_mode,
             "applicability_reason": applicability_reason,
+            "match_unavailable_reason": None,
             "items": items,
         },
     }
