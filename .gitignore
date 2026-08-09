@@ -21,5 +21,6 @@ backend/reports/
 backend/=*
 docs/archive/
 docs/engineering/
+.local-backups/
 AI_HANDOFF*.md
 POLICY_PIPELINE_EXECUTION_HANDOFF.md

@@ -5,9 +5,8 @@
 """
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List
 
 from app.schemas.enterprise import EnterpriseProfile, RiskEvent, BusinessStatus, EnterpriseSearchResult
 from app.tools.adapters.base import DataAdapter

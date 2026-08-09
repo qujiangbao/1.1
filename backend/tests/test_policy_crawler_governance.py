@@ -2,7 +2,11 @@ from pathlib import Path
 
 from app.core.policy_crawler_access import ROOT_ADMIN_USER_ID, is_root_admin
 from app.core.security import UserContext
-from app.services.policy_crawler_engine import canonical_url, deduplicate_entries
+from app.services.policy_crawler_engine import (
+    _is_allowed_url,
+    canonical_url,
+    deduplicate_entries,
+)
 
 
 def _entry(tmp_path: Path, name: str, url: str, content: str, source_key: str) -> dict:
@@ -33,6 +37,16 @@ def test_canonical_url_removes_mobile_form_query_and_fragment():
     assert canonical_url(
         "https://www.gz.gov.cn/example/content/mpost_123.html?a=1#x"
     ) == "https://www.gz.gov.cn/example/content/post_123.html"
+
+
+def test_crawler_url_allowlist_rejects_ssrf_variants():
+    assert _is_allowed_url("https://www.gz.gov.cn/zwgk/policy.html")
+    assert _is_allowed_url("https://gxj.gz.gov.cn/policy.html")
+    assert not _is_allowed_url("http://www.gz.gov.cn/policy.html")
+    assert not _is_allowed_url("https://www.gz.gov.cn:8443/policy.html")
+    assert not _is_allowed_url("https://www.gz.gov.cn:invalid/policy.html")
+    assert not _is_allowed_url("https://www.gz.gov.cn@example.com/policy.html")
+    assert not _is_allowed_url("https://gz.gov.cn.example.com/policy.html")
 
 
 def test_same_document_number_is_cross_source_duplicate(tmp_path: Path):

@@ -1,6 +1,5 @@
 """Agent Registry — Supervisor 通过此注册表发现和调用 Agent"""
 from typing import Dict
-from app.schemas.agent import AgentCapability
 
 
 AGENT_REGISTRY: Dict[str, dict] = {

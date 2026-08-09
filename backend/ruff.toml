@@ -1,0 +1,7 @@
+target-version = "py312"
+
+[lint]
+# Start with correctness rules that are clean across the existing codebase.
+# Style and modernization rules can be enabled incrementally without blocking
+# security or regression fixes.
+select = ["F"]

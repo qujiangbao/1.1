@@ -1,8 +1,11 @@
 """Build dashboard payloads from operational and business data."""
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
+from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
+from time import monotonic
 from typing import Any
 
 from app.agents.registry import AGENT_REGISTRY
@@ -10,6 +13,9 @@ from app.services.runtime_metrics import get_runtime_metrics
 
 
 COLORS = ["#1677ff", "#52c41a", "#faad14", "#722ed1", "#13c2c2", "#eb2f96"]
+_BUSINESS_METRICS_TTL_SECONDS = 15.0
+_BUSINESS_METRICS_CACHE: tuple[int, float, dict[str, Any]] | None = None
+_BUSINESS_METRICS_LOCK = asyncio.Lock()
 
 
 def _empty_agent_stat() -> dict[str, Any]:
@@ -193,6 +199,30 @@ def _local_file_business_metrics() -> dict[str, Any]:
 
 
 async def _database_business_metrics() -> dict[str, Any]:
+    """Reuse expensive dashboard aggregates briefly across adjacent widgets."""
+    from app.database import session as database_session
+
+    if database_session.SessionLocal is None:
+        return _local_file_business_metrics()
+
+    global _BUSINESS_METRICS_CACHE
+    cache_key = id(database_session.SessionLocal)
+    now = monotonic()
+    cached = _BUSINESS_METRICS_CACHE
+    if cached and cached[0] == cache_key and now - cached[1] < _BUSINESS_METRICS_TTL_SECONDS:
+        return deepcopy(cached[2])
+
+    async with _BUSINESS_METRICS_LOCK:
+        now = monotonic()
+        cached = _BUSINESS_METRICS_CACHE
+        if cached and cached[0] == cache_key and now - cached[1] < _BUSINESS_METRICS_TTL_SECONDS:
+            return deepcopy(cached[2])
+        metrics = await _load_database_business_metrics()
+        _BUSINESS_METRICS_CACHE = (cache_key, now, metrics)
+        return deepcopy(metrics)
+
+
+async def _load_database_business_metrics() -> dict[str, Any]:
     from app.database import session as database_session
 
     if database_session.SessionLocal is None:

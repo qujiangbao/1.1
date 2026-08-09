@@ -5,7 +5,6 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime
 import hashlib
 from pathlib import Path
-from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert

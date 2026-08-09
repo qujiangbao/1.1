@@ -75,7 +75,6 @@ def _wrap_agent_router(fn):
             raise
 
         # 执行后发布 agent_done
-        task_plan_after = result.get("task_plan", [])
         agent_results = result.get("agent_results", {})
         for agent, ar in agent_results.items():
             summary = (ar.get("result") or {}).get("summary", "")
@@ -325,7 +324,6 @@ def agent_router_node(state: SupervisorState) -> SupervisorState:
 
     task["status"] = "running"
     agent = task["agent"]
-    display = AGENT_REGISTRY.get(agent, {}).get("display", agent)
     runtime_metrics = get_runtime_metrics()
     metric_started = runtime_metrics.begin(agent, task["task_id"])
 

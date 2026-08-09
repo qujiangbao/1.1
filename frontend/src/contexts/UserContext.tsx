@@ -3,10 +3,17 @@
 import {
   useState,
   useEffect,
+  useMemo,
   createContext,
   useContext,
   useCallback,
 } from "react";
+import {
+  clearAuthSession,
+  getAccessToken,
+  getStoredUser,
+  setStoredUser,
+} from "@/lib/authStorage";
 
 interface UserInfo {
   id: string;
@@ -39,20 +46,18 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
 
   const clearSession = useCallback(() => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("refresh_token");
-    localStorage.removeItem("user");
+    clearAuthSession();
     setUserState(null);
     setAuthenticated(false);
   }, []);
 
   const setUser = useCallback((nextUser: UserInfo | null) => {
     setUserState(nextUser);
-    setAuthenticated(Boolean(nextUser && localStorage.getItem("token")));
+    setAuthenticated(Boolean(nextUser && getAccessToken()));
   }, []);
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
+    const token = getAccessToken();
     if (!token) {
       setReady(true);
       return;
@@ -75,11 +80,11 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
           role: data.role,
           display_name: data.display_name,
         };
-        localStorage.setItem("user", JSON.stringify(restored));
+        setStoredUser(restored);
         setUserState(restored);
         setAuthenticated(true);
       } catch {
-        const stored = localStorage.getItem("user");
+        const stored = getStoredUser();
         if (stored) {
           try {
             setUserState(JSON.parse(stored));
@@ -98,12 +103,18 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     void restore();
   }, [clearSession]);
 
-  const canAccess = (roles: string[]) =>
-    Boolean(user && roles.includes(user.role));
+  const canAccess = useCallback(
+    (roles: string[]) => Boolean(user && roles.includes(user.role)),
+    [user],
+  );
+  const value = useMemo(
+    () => ({ user, setUser, canAccess, authenticated, ready, clearSession }),
+    [user, setUser, canAccess, authenticated, ready, clearSession],
+  );
 
   return (
     <UserContext.Provider
-      value={{ user, setUser, canAccess, authenticated, ready, clearSession }}
+      value={value}
     >
       {children}
     </UserContext.Provider>

@@ -1,5 +1,6 @@
 """Trace API — 从 LangGraph Checkpointer 检索真实执行链路 (P2: async graph)"""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from app.core.security import UserContext, require_task_owner, require_user
 from app.schemas.agent import TraceResponse
 from app.langgraph.graph import get_supervisor_graph
 import logging
@@ -9,7 +10,10 @@ router = APIRouter()
 
 
 @router.get("/agent/task/{task_id}/trace", response_model=TraceResponse)
-async def get_trace(task_id: str):
+async def get_trace(
+    task_id: str,
+    user: UserContext = Depends(require_user),
+):
     """从 LangGraph checkpointer 检索真实 trace_steps 和 task_plan"""
     try:
         graph = await get_supervisor_graph()
@@ -20,6 +24,7 @@ async def get_trace(task_id: str):
             raise HTTPException(status_code=404, detail="Task not found or trace not yet generated")
 
         sv = state.values
+        require_task_owner(sv, user)
         trace_steps = sv.get("trace_steps", [])
         task_plan = sv.get("task_plan", [])
         agent_results = sv.get("agent_results", {})
@@ -82,9 +87,12 @@ async def get_trace(task_id: str):
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.warning(f"Trace retrieval failed for {task_id}: {e}")
-        raise HTTPException(status_code=503, detail=f"Trace unavailable: {str(e)}")
+    except Exception as exc:
+        logger.exception("Trace retrieval failed for task_id=%s", task_id)
+        raise HTTPException(
+            status_code=503,
+            detail="Trace service unavailable",
+        ) from exc
 
 
 def _fallback_trace(task_id: str, reason: str) -> TraceResponse:

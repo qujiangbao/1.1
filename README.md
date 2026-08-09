@@ -1,153 +1,112 @@
-# Industrial Park Agent — 广州产业 AI 运营官
+# 智园领航——AI 产业园运营平台
 
-> **不是 Chatbot，是一支 7×24 小时工作的 AI 产业运营团队。**
->
-> 替代传统：招商团队、政策咨询团队、企业服务团队、产业研究团队、风险管理团队。
+面向产业园区招商、政策、风险与日常运营决策的多智能体平台。Supervisor 负责理解需求、规划任务和汇总结果，并调度产业研究、招商决策、企业风险、政策顾问、企业服务和 BI 分析六个业务 Agent。
 
-> 数据安全说明：本仓库仅发布源码、数据库迁移、测试和配置模板。生产密钥、园区私有资料、企业快照及政策全文快照不会进入 Git；请在部署后通过园区资料库和政策同步工具导入。
+系统坚持证据边界：缺少权威字段时显示“待补证/尚未评估”，不会把缺失值当成零分，也不会把演示数据冒充真实经营数据。政策检索与资格判断分离，未经人工审核的结构化规则只作复核提示。
 
----
+## 核心能力
 
-## 架构概览
+- 园区决策工作台：多 Agent 协作、任务状态和 Trace 追踪。
+- 招商决策中心：企业筛选、证据卡片、数据缺口、政策候选与 CRM 跟进。
+- 政策服务：政府政策检索、原文追溯和人工审核后的资格规则判断。
+- 政策更新中心：初始管理员授权、政府域名白名单、增量抓取、正文指纹和版本去重。
+- 园区资料库：导入 PDF、DOCX、PPTX、TXT 和 Markdown；文件与正文双重去重；结构化补充企业和风险证据。
+- 运营与风险看板：汇总任务、企业、政策、招商漏斗和已导入风险证据。
 
-```
-                    User / Browser
-                         |
-                  Nginx :80 (reverse proxy)
-                    /        \
-                   /          \
-        Next.js :3000       FastAPI :8000
-        (Ant Design)        (API Gateway)
-                                 |
-                    LangGraph Supervisor (7 nodes)
-                   /    |    |    |    |    \
-                  /     |    |    |    |     \
-           Industry Investment Risk Policy Service  BI
-           Agent    Agent    Agent Agent  Agent   Agent
-                  \     |    |    |    |    /
-                   \    |    |    |    |   /
-                    Tool Gateway (18 tools, RBAC)
-                           |
-              PostgreSQL 16 + pgvector + Redis 7
+## 技术架构
+
+```text
+Browser
+  │
+Nginx :8080
+  ├── Next.js 16 / React 19 / Ant Design
+  └── FastAPI / LangGraph Supervisor
+        ├── 6 个业务 Agent + Tool Gateway
+        ├── PostgreSQL 16 + pgvector
+        ├── Redis 7
+        └── DeepSeek / OpenAI-compatible LLM Gateway
 ```
 
-## 技术栈
+生产部署使用 Docker Compose；后端运行在 Python 3.12，前端使用 Node.js 22。
 
-| 层级 | 技术 |
-|------|------|
-| AI 编排 | LangGraph (StateGraph) |
-| 后端 | FastAPI (Python 3.12) |
-| 前端 | Next.js 16 + React + Ant Design |
-| 数据库 | PostgreSQL 16 + pgvector 0.8.5 |
-| 缓存 | Redis 7 |
-| LLM | DeepSeek V4 |
-| 部署 | Docker Compose + Nginx |
+## 本地开发
 
-## 快速启动
+复制开发配置：
 
-### 后端（WSL/Linux 必须）
+```powershell
+Copy-Item .env.example .env
+```
+
+后端（Windows + WSL 示例）：
 
 ```bash
 cd /mnt/d/industrial-park-v1.1/backend
-uv pip install -r requirements.txt --python .venv312/bin/python
-PYTHONPATH=. .venv312/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+python3.12 -m venv .venv312
+.venv312/bin/python -m pip install -r requirements-dev.txt
+.venv312/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-### 前端（Windows PowerShell 必须）
+前端（PowerShell）：
 
 ```powershell
-cd D:\industrial-park-v1.1\frontend
+Set-Location D:\industrial-park-v1.1\frontend
 npm ci
 npm run dev
 ```
 
-### 开发地址
+开发地址：
 
-| 服务 | 地址 |
-|------|------|
-| 前端 | http://localhost:3000 |
-| API 文档 | http://localhost:8000/docs |
-| Liveness | http://localhost:8000/api/v1/health/live |
-| Readiness | http://localhost:8000/api/v1/health/ready |
+- 前端：http://localhost:3000
+- API 文档：http://localhost:8000/docs
+- Liveness：http://localhost:8000/api/v1/health/live
+- Readiness：http://localhost:8000/api/v1/health/ready
 
-### 生产部署
+## 生产部署
 
-```bash
-cp .env.production.example .env.production
-# 替换 .env.production 中全部 replace-with- 值
-./deploy.sh up
+```powershell
+Copy-Item .env.production.example .env.production
+# 将所有 replace-with- 占位值替换为真实强密码或密钥
+docker compose --env-file .env.production up -d --build
 ```
 
-## Agent 团队
+生产配置会强制要求数据库、认证、至少 32 字符的 JWT 密钥、明确的 CORS 来源和非占位密码。不要提交 `.env.production`、园区私有资料、企业快照或政策全文快照。
 
-| Agent | 角色 | 一句话职责 |
-|-------|------|-----------|
-| **Supervisor** | AI 运营总经理 | 意图识别 → 任务规划 → Agent 路由 → 结果聚合 |
-| **Policy** | AI 政策顾问 | PDF 解析 → 向量检索 → 政策匹配 → 申报建议 |
-| **Investment** | AI 招商经理 | 企业搜索 → 画像 → 评分 → 推荐 → 策略 |
-| **Industry** | AI 产业研究院 | 产业链分析 → 趋势预测 → 招商方向 |
-| **Risk** | 企业风险雷达 | 6 维风险评分（经营/财务/舆情/法律/人才/市场） |
-| **Service** | AI 企业管家 | 需求理解 → 服务分类 → 工单管理 |
-| **BI** | AI 数字驾驶舱 | 5 大维度 30+ KPI 可视化 |
+## 园区资料导入约束
 
-## 数据管道
+- 支持：PDF、DOCX、PPTX、TXT、Markdown。
+- 单文件上限：25 MB。
+- Office 文件会校验真实 ZIP 结构、成员数量和解压后大小；PDF 会校验文件签名和页数。
+- 提取正文设有安全上限；重复文件或正文不会再次入库。
+- 导入分类包括园区规划、招商资料、企业资料、政策文件、会议纪要和园区综合资料。
 
-```
-政策管道：
-  gz.gov.cn → Crawl4AI (offline) → Markdown cache (222 docs)
-    → PolicyRetriever → pgvector (HNSW) → PolicyAgent
-
-企业管道：
-  天眼查/企查查 → Enterprise Adapters → PostgreSQL
-    → EnterpriseTool → InvestmentAgent/RiskAgent
-```
-
-## 文档体系
-
-| 文档 | 用途 |
-|------|------|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构唯一事实来源（FROZEN） |
-| [doc-index.md](docs/doc-index.md) | 完整文档索引 |
-| [agent-index.md](docs/agent-index.md) | Agent 职责与设计文档索引 |
-| [CODEBUDDY.md](CODEBUDDY.md) | AI 开发助手上下文 |
-| `docs/architecture/` | 冻结设计规范 |
-| `docs/agents/` | Agent 详细设计 |
-| `docs/engineering/` | 工程实施文档 |
-| `docs/archive/` | 历史版本归档 |
-
-## 版本历史
-
-| 版本 | 日期 | 状态 | 说明 |
-|------|------|:---:|------|
-| V1.0 | 2026-07-21 | ARCHIVE | 12 Agent 架构设计完成 |
-| V1.1 | 2026-07-22 | FREEZE | 比赛金奖版（main 分支） |
-| V1.2 | 2026-07-25 | — | P0-P8 生产升级 |
-| **V1.3** | **2026-07-28** | **CURRENT** | Crawl4AI 政策集成 + 生产稳定 |
-
-## 验证
+## 质量验证
 
 ```bash
 # 后端
-cd backend && PYTHONPATH=. .venv312/bin/python -m pytest -q
-
-# 前端
-cd frontend && npm run build
-
-# E2E
-./warmup.sh http://localhost:8000
-./e2e-test.sh http://localhost:8000
+cd backend
+.venv312/bin/python -m ruff check app tests
+.venv312/bin/python -m pip_audit -r requirements.txt
+.venv312/bin/python -m pytest -q
 ```
 
-## 约束
+```powershell
+# 前端
+Set-Location frontend
+npm audit --omit=dev
+npm run typecheck
+npm run build
+```
 
-- 前端 **必须** 在 Windows PowerShell 运行（WSL npm on /mnt/d 超时）
-- 后端 **必须** 在 WSL/Linux 运行
-- `main` 分支永久冻结（V1.1 比赛金奖版）
-- Agent 接口 `execute_business_agent()` 签名不可变
-- Supervisor 7 节点不可增删
-- 使用 `uv pip install`，非 `pip`
-- 数据不得伪造：`data_available=false` 时用 mock，不填假数字
+GitHub Actions 会在 push 和 pull request 时执行相同质量门禁，Dependabot 每周检查 Python、npm 和 Actions 依赖。
 
----
+## 文档
 
-**Industrial Park Agent — 让 AI 运营一座产业园。**
+- [系统架构](docs/ARCHITECTURE.md)
+- [项目上下文](docs/PROJECT_CONTEXT.md)
+- [文档索引](docs/doc-index.md)
+- [Agent 索引](docs/agent-index.md)
+- [政策更新中心使用说明](docs/政策更新中心使用说明.md)
+
+## 数据与合规
+
+仓库只应包含源码、迁移、测试和配置模板。生产密钥、园区私有资料、真实企业数据和政策全文快照必须通过部署环境或系统导入，不得进入 Git。公开数据也应保留来源 URL、采集时间和处理记录，AI 结论必须允许人工复核。

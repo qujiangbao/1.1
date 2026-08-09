@@ -1,15 +1,18 @@
-"""Security — JWT Authentication (P4: Access/Refresh Token + UserContext)"""
-from dataclasses import dataclass, field
+"""Security - JWT authentication and task ownership checks."""
+import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hmac import compare_digest
 from typing import Annotated, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import jwt, JWTError
+import jwt
+from jwt import InvalidTokenError
 from app.config import get_settings
 
 settings = get_settings()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -68,7 +71,7 @@ def verify_token(token: str) -> dict | None:
     """验证并解码 JWT Token"""
     try:
         return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-    except JWTError:
+    except InvalidTokenError:
         return None
 
 
@@ -95,7 +98,10 @@ def verify_password(password: str, password_hash: str) -> bool:
     except ValueError:
         # Legacy SHA256 fallback
         import hashlib
-        return hashlib.sha256(password.encode()).hexdigest() == password_hash
+        return compare_digest(
+            hashlib.sha256(password.encode()).hexdigest(),
+            password_hash,
+        )
 
 
 # ═══ FastAPI Dependencies ═══
@@ -130,7 +136,8 @@ async def _get_user_from_db(user_id: str) -> Optional[dict]:
                 "display_name": user.display_name,
             }
     except Exception:
-        return None
+        logger.exception("Authentication database lookup failed for user_id=%s", user_id)
+        raise
 
 
 async def require_user(token: Annotated[str | None, Depends(oauth2_scheme)]) -> UserContext:
@@ -166,11 +173,23 @@ async def require_user(token: Annotated[str | None, Depends(oauth2_scheme)]) -> 
 
     user_id = payload["sub"]
 
-    # 尝试从 DB 加载用户 (DATABASE_ENABLED=false 时使用 JWT payload 中的信息)
+    # The database is authoritative when enabled. Never trust stale JWT role
+    # claims after an account is disabled, deleted, or downgraded.
     if settings.database_enabled:
-        db_user = await _get_user_from_db(user_id)
-        if db_user:
-            return UserContext(**db_user)
+        try:
+            db_user = await _get_user_from_db(user_id)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication backend unavailable",
+            ) from exc
+        if db_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User account is unavailable or inactive",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return UserContext(**db_user)
 
     # Fallback: 使用 JWT payload 中的信息
     return UserContext(
@@ -179,3 +198,12 @@ async def require_user(token: Annotated[str | None, Depends(oauth2_scheme)]) -> 
         role=payload.get("role", "viewer"),
         park_id=payload.get("park_id"),
     )
+
+
+def require_task_owner(values: dict, user: UserContext) -> None:
+    """Hide tasks owned by another user when authentication is enabled."""
+    if not settings.auth_enabled or user.role == "super_admin":
+        return
+    owner_id = str(values.get("user_id") or "")
+    if not owner_id or not compare_digest(owner_id, str(user.user_id)):
+        raise HTTPException(status_code=404, detail="Task not found")

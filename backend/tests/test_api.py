@@ -4,6 +4,7 @@ import pytest
 from urllib.parse import urlparse
 
 from app.main import app
+from app.core.security import create_refresh_token
 from app.langgraph.nodes.supervisor_nodes import result_aggregator_node
 
 
@@ -47,6 +48,21 @@ def test_login_returns_jwt_for_demo_admin():
         assert response.status_code == 200
         assert response.json()["token_type"] == "bearer"
         assert response.json()["access_token"]
+
+
+def test_refresh_token_is_accepted_only_in_request_body():
+    token = create_refresh_token("demo-user")
+    with TestClient(app) as client:
+        query_response = client.post(f"/api/v1/auth/refresh?refresh_token={token}")
+        body_response = client.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": token},
+        )
+
+    assert query_response.status_code == 422
+    assert body_response.status_code == 200
+    assert body_response.json()["access_token"]
+    assert body_response.json()["refresh_token"]
 
 
 @pytest.mark.skipif(

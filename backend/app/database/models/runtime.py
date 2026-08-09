@@ -1,5 +1,5 @@
 """Agent runtime models"""
-from sqlalchemy import Column, String, Integer, Float, Text, DateTime, ForeignKey
+from sqlalchemy import Column, String, Integer, Text, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
 from app.database.session import Base
 from datetime import datetime
@@ -62,7 +62,7 @@ class AgentMemory(Base):
     conversation_id = Column(String(50), ForeignKey("conversation.conversation_id"), nullable=False)
     role = Column(String(20), nullable=False)  # user / assistant / system
     content = Column(Text, nullable=False)
-    metadata_ = Column("metadata", JSONB, default={})
+    metadata_ = Column("metadata", JSONB, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

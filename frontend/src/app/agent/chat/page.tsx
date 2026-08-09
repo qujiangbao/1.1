@@ -145,6 +145,12 @@ export default function AgentChatPage() {
   const [showAgents, setShowAgents] = useState(true);
   const [hydrated, setHydrated] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const streamRef = useRef<EventSource | null>(null);
+
+  useEffect(() => () => {
+    streamRef.current?.close();
+    streamRef.current = null;
+  }, []);
 
   // Persist chat history to sessionStorage so it survives navigation
   const STORAGE_KEY = "chat_last_session";
@@ -212,6 +218,12 @@ export default function AgentChatPage() {
         streamingStarted = true;
         let terminal = false;
         const es = new EventSource(resolveApiUrl(data.stream_url, API));
+        streamRef.current?.close();
+        streamRef.current = es;
+        const closeStream = () => {
+          es.close();
+          if (streamRef.current === es) streamRef.current = null;
+        };
 
         es.addEventListener("snapshot", (event) => {
           const snapshot = JSON.parse((event as MessageEvent).data);
@@ -266,7 +278,7 @@ export default function AgentChatPage() {
             },
           ]);
           setLoading(false);
-          es.close();
+          closeStream();
         });
 
         es.addEventListener("error", (event) => {
@@ -283,7 +295,7 @@ export default function AgentChatPage() {
             ),
           );
           setLoading(false);
-          es.close();
+          closeStream();
         });
 
         es.onerror = () => {
@@ -301,7 +313,7 @@ export default function AgentChatPage() {
             ),
           );
           setLoading(false);
-          es.close();
+          closeStream();
         };
         return;
       }

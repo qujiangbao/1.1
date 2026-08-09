@@ -1,20 +1,28 @@
 """Task API (P8: ID fix + team status + daily report)"""
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from app.core.security import UserContext, require_task_owner, require_user
 from app.schemas.agent import ChatRequest
 
 router = APIRouter()
 
 
 @router.post("/agent/task")
-async def create_task(request: ChatRequest):
+async def create_task(
+    request: ChatRequest,
+    user: UserContext = Depends(require_user),
+):
     from app.api.v1.agent import agent_chat
-    return await agent_chat(request)
+
+    return await agent_chat(request, user)
 
 
 @router.get("/agent/task/{task_id}")
-async def get_task(task_id: str):
+async def get_task(
+    task_id: str,
+    user: UserContext = Depends(require_user),
+):
     from app.langgraph.graph import get_supervisor_graph
     graph = await get_supervisor_graph()
     # P8: thread_id now uses task_id (not conversation_id)
@@ -22,6 +30,7 @@ async def get_task(task_id: str):
     if state is None or not state.values:
         raise HTTPException(status_code=404, detail="Task not found")
     values = state.values
+    require_task_owner(values, user)
     return {
         "task_id": task_id,
         "status": values.get("status", "unknown"),

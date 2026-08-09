@@ -79,13 +79,46 @@ def test_production_rejects_placeholder_secrets():
         )
 
 
+def test_production_rejects_wildcard_cors_with_credentials():
+    with pytest.raises(ValidationError, match="CORS_ORIGINS"):
+        Settings(
+            _env_file=None,
+            app_env="production",
+            jwt_secret="a-secure-random-secret-that-is-longer-than-32-characters",
+            auth_enabled=False,
+            database_enabled=False,
+            cors_origins=["*"],
+        )
+
+
+def test_rejects_unsafe_jwt_algorithm():
+    with pytest.raises(ValidationError, match="JWT_ALGORITHM"):
+        Settings(_env_file=None, jwt_algorithm="none")
+
+
+def test_production_cannot_disable_authentication():
+    with pytest.raises(ValidationError, match="AUTH_ENABLED"):
+        Settings(
+            _env_file=None,
+            app_env="production",
+            jwt_secret="a-secure-random-secret-that-is-longer-than-32-characters",
+            auth_enabled=False,
+            database_enabled=True,
+            database_url=(
+                "postgresql+asyncpg://industrial:strong-password"
+                "@postgres/industrial_park"
+            ),
+        )
+
+
 def test_production_rejects_default_database_password():
     with pytest.raises(ValidationError, match="DATABASE_URL"):
         Settings(
             _env_file=None,
             app_env="production",
             jwt_secret="a-secure-random-secret-that-is-longer-than-32-characters",
-            auth_enabled=False,
+            auth_enabled=True,
+            admin_password="strong-admin-password",
             database_enabled=True,
             database_url="postgresql+asyncpg://industrial:industrial@postgres/industrial_park",
         )
@@ -119,7 +152,8 @@ def test_production_pgvector_rejects_missing_embedding_key():
             _env_file=None,
             app_env="production",
             jwt_secret="a-secure-random-secret-that-is-longer-than-32-characters",
-            auth_enabled=False,
+            auth_enabled=True,
+            admin_password="strong-admin-password",
             database_enabled=True,
             database_url=(
                 "postgresql+asyncpg://industrial:strong-password"
@@ -136,7 +170,8 @@ def test_production_pgvector_accepts_dashscope_embedding_key():
         _env_file=None,
         app_env="production",
         jwt_secret="a-secure-random-secret-that-is-longer-than-32-characters",
-        auth_enabled=False,
+        auth_enabled=True,
+        admin_password="strong-admin-password",
         database_enabled=True,
         database_url=(
             "postgresql+asyncpg://industrial:strong-password"
@@ -161,7 +196,8 @@ def test_production_dashscope_rejects_openai_key_as_substitute():
             jwt_secret=(
                 "a-secure-random-secret-that-is-longer-than-32-characters"
             ),
-            auth_enabled=False,
+            auth_enabled=True,
+            admin_password="strong-admin-password",
             database_enabled=True,
             database_url=(
                 "postgresql+asyncpg://industrial:strong-password"

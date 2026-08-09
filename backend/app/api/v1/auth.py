@@ -1,14 +1,22 @@
 """Auth API — P4: Login / Refresh / Me (DB-backed)"""
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from app.core.security import (
     create_access_token, create_refresh_token, verify_token,
-    hash_password, verify_password, UserContext, require_user,
+    verify_password, UserContext, require_user,
 )
 from app.schemas.agent import LoginRequest
 from app.config import get_settings
 
 router = APIRouter()
 settings = get_settings()
+_DUMMY_PASSWORD_HASH = (
+    "$2b$12$daYugG3QcE8trOOH71GRPuzGIZQgENjPLoXqIn5lK4wMtOj4SZYL2"
+)
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
 
 
 @router.post("/auth/login")
@@ -52,6 +60,8 @@ async def login(request: LoginRequest):
         user = result.scalar_one_or_none()
 
         if user is None or not user.is_active:
+            # Keep missing/disabled-account timing close to a real bcrypt check.
+            verify_password(request.password, _DUMMY_PASSWORD_HASH)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Incorrect username or password",
@@ -93,9 +103,9 @@ async def login(request: LoginRequest):
 
 
 @router.post("/auth/refresh")
-async def refresh_token(refresh_token: str):
-    """刷新 Access Token"""
-    payload = verify_token(refresh_token)
+async def refresh_token(request: RefreshTokenRequest):
+    """Refresh access credentials without exposing tokens in URL logs."""
+    payload = verify_token(request.refresh_token)
     if not payload or payload.get("type") != "refresh":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -128,7 +138,11 @@ async def refresh_token(refresh_token: str):
             "sub": user_id, "username": user_id, "role": "park_manager",
         })
 
-    return {"access_token": new_token, "token_type": "bearer"}
+    return {
+        "access_token": new_token,
+        "refresh_token": create_refresh_token(user_id),
+        "token_type": "bearer",
+    }
 
 
 @router.get("/auth/me")

@@ -11,6 +11,7 @@ import {
   UserOutlined,
 } from "@ant-design/icons";
 import { useUserContext } from "@/contexts/UserContext";
+import { saveAuthSession } from "@/lib/authStorage";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
@@ -34,16 +35,12 @@ export default function LoginPage() {
         throw new Error(err.detail || "用户名或密码错误");
       }
       const data = await response.json();
-      localStorage.setItem("token", data.access_token);
-      if (data.refresh_token) localStorage.setItem("refresh_token", data.refresh_token);
-
-      // P4: 存储 user info 到 context
-      if (data.user) {
-        localStorage.setItem("user", JSON.stringify(data.user));
-        setUser(data.user);
-      }
+      saveAuthSession(data.access_token, data.refresh_token, data.user);
+      if (data.user) setUser(data.user);
       const requested = new URLSearchParams(window.location.search).get("returnTo");
-      const destination = requested?.startsWith("/") ? requested : "/agent/workspace";
+      const destination = requested?.startsWith("/") && !requested.startsWith("//")
+        ? requested
+        : "/agent/workspace";
       router.replace(destination);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "登录失败");

@@ -55,6 +55,8 @@ class DatabaseTool:
                 )
                 existing = result.scalar_one_or_none()
                 if existing:
+                    if user_id and existing.user_id != user_id:
+                        raise PermissionError("Conversation belongs to another user")
                     existing.title = title or existing.title
                     existing.thread_id = thread_id or existing.thread_id
                     existing.message_count = (existing.message_count or 0) + 1
@@ -71,18 +73,31 @@ class DatabaseTool:
                     )
                     db.add(conv)
                 await db.commit()
+        except PermissionError:
+            raise
         except Exception as e:
             logger.warning("save_conversation(%s) failed: %s", conv_id, e)
 
     async def load_conversation_history(self, conv_id: str,
-                                        limit: int = 10) -> List[Dict[str, Any]]:
+                                        limit: int = 10,
+                                        user_id: str = "") -> List[Dict[str, Any]]:
         """加载 agent_memory 表中最近 N 轮对话消息"""
         if not self.enabled:
             return []
         try:
-            from app.database.models.runtime import AgentMemory
+            from app.database.models.runtime import AgentMemory, Conversation
             async for db in self._db():
                 from sqlalchemy import select
+                if user_id:
+                    owner = (
+                        await db.execute(
+                            select(Conversation.user_id).where(
+                                Conversation.conversation_id == conv_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if owner is not None and owner != user_id:
+                        raise PermissionError("Conversation belongs to another user")
                 result = await db.execute(
                     select(AgentMemory)
                     .where(AgentMemory.conversation_id == conv_id)
@@ -95,6 +110,8 @@ class DatabaseTool:
                      "timestamp": r.created_at.isoformat() if r.created_at else ""}
                     for r in reversed(rows)  # 正序返回
                 ]
+        except PermissionError:
+            raise
         except Exception as e:
             logger.warning("load_conversation_history(%s) failed: %s", conv_id, e)
             return []
@@ -322,6 +339,7 @@ class DatabaseTool:
 
                 return {
                     "thread_id": thread_id,
+                    "user_id": channels.get("user_id"),
                     "checkpoint_id": row[0],
                     "status": status,
                     "current_node": node_name,

@@ -10,7 +10,6 @@
   - 不放入 langgraph 目录"""
 
 import logging
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -84,11 +83,11 @@ async def execute_graph_with_events(
         except Exception as e:
             logger.warning("[StreamExecutor] save_message failed: %s", e)
 
-    except Exception as e:
-        logger.exception("[StreamExecutor] graph execution failed: %s", e)
+    except Exception:
+        logger.exception("[StreamExecutor] graph execution failed")
         await event_bus.publish(task_id, "error", {
             "task_id": task_id,
-            "message": str(e),
+            "message": "Agent execution failed; retry or contact an administrator",
         }, source="supervisor")
 
     # 不在此关闭 channel — SSE 端点负责关闭

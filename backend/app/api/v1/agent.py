@@ -5,7 +5,12 @@ from datetime import datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends
-from app.core.security import UserContext, create_stream_token, require_user
+from app.core.security import (
+    UserContext,
+    create_stream_token,
+    require_task_owner,
+    require_user,
+)
 from app.schemas.agent import ChatRequest, ChatResponse, CheckpointStatus
 from app.langgraph.graph import get_supervisor_graph
 
@@ -38,18 +43,27 @@ async def agent_chat(
     # P2: DB tool + 对话历史
     from app.tools.database_tool import get_database_tool
     db_tool = get_database_tool()
-    history = await db_tool.load_conversation_history(conversation_id)
+    try:
+        history = await db_tool.load_conversation_history(
+            conversation_id,
+            user_id=user.user_id,
+        )
+        await db_tool.save_conversation(
+            conv_id=conversation_id,
+            user_id=user.user_id,
+            title=request.message[:50],
+            thread_id=conversation_id,
+        )
+    except PermissionError as exc:
+        # Do not reveal whether a supplied conversation ID exists.
+        from fastapi import HTTPException
 
-    await db_tool.save_conversation(
-        conv_id=conversation_id,
-        user_id=user.user_id,
-        title=request.message[:50],
-        thread_id=conversation_id,
-    )
+        raise HTTPException(status_code=404, detail="Conversation not found") from exc
 
     graph = await get_supervisor_graph()
     state = {
         "user_id": user.user_id,
+        "park_id": user.park_id,
         "conversation_id": conversation_id,
         "user_query": request.message,
         "user_role": user.role,
@@ -129,7 +143,10 @@ async def agent_chat(
 
 
 @router.get("/agent/checkpoint/{thread_id}", response_model=CheckpointStatus)
-async def get_checkpoint_status(thread_id: str):
+async def get_checkpoint_status(
+    thread_id: str,
+    user: UserContext = Depends(require_user),
+):
     """查询 Agent 执行进度（从 LangGraph checkpoints 表读取）
 
     DATABASE_ENABLED=true  → 从 PostgreSQL checkpoints 表读取
@@ -143,4 +160,5 @@ async def get_checkpoint_status(thread_id: str):
             thread_id=thread_id,
             status="not_found",
         )
+    require_task_owner(status, user)
     return CheckpointStatus(**status)

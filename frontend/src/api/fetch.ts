@@ -1,3 +1,39 @@
+import {
+  clearAuthSession,
+  getAccessToken,
+  getRefreshToken,
+  updateAuthTokens,
+} from "@/lib/authStorage";
+
+let refreshPromise: Promise<string | null> | null = null;
+
+async function refreshAccessToken() {
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) return null;
+  if (!refreshPromise) {
+    refreshPromise = fetch(
+      `${process.env.NEXT_PUBLIC_API_URL || "/api/v1"}/auth/refresh`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      },
+    )
+      .then(async (response) => {
+        if (!response.ok) return null;
+        const payload = await response.json();
+        if (!payload.access_token) return null;
+        updateAuthTokens(payload.access_token, payload.refresh_token);
+        return String(payload.access_token);
+      })
+      .catch(() => null)
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+}
+
 export class ApiError extends Error {
   status: number;
   payload: unknown;
@@ -12,9 +48,7 @@ export class ApiError extends Error {
 
 function redirectToLogin() {
   if (typeof window === "undefined") return;
-  localStorage.removeItem("token");
-  localStorage.removeItem("refresh_token");
-  localStorage.removeItem("user");
+  clearAuthSession();
 
   if (window.location.pathname.startsWith("/auth/")) return;
   const returnTo = `${window.location.pathname}${window.location.search}`;
@@ -27,7 +61,7 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
     headers.set("Content-Type", "application/json");
   }
   if (typeof window !== "undefined") {
-    const token = localStorage.getItem("token");
+    const token = getAccessToken();
     if (token) headers.set("Authorization", `Bearer ${token}`);
   }
 
@@ -37,6 +71,18 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
   } catch (reason) {
     if (reason instanceof DOMException && reason.name === "AbortError") throw reason;
     throw new ApiError("无法连接服务器，请检查网络后重试", 0, reason);
+  }
+  if (response.status === 401 && !String(input).includes("/auth/")) {
+    const renewedToken = await refreshAccessToken();
+    if (renewedToken) {
+      headers.set("Authorization", `Bearer ${renewedToken}`);
+      try {
+        response = await fetch(input, { ...init, headers });
+      } catch (reason) {
+        if (reason instanceof DOMException && reason.name === "AbortError") throw reason;
+        throw new ApiError("无法连接服务器，请检查网络后重试", 0, reason);
+      }
+    }
   }
   if (response.status === 401) redirectToLogin();
   return response;

@@ -11,7 +11,7 @@ P0 核心模块。所有 Agent 通过此类获取真实企业数据。
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List
 
 from app.schemas.enterprise import EnterpriseProfile, RiskEvent, BusinessStatus, EnterpriseSearchResult
 from app.tools.adapters.base import DataAdapter

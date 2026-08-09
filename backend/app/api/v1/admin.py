@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app.core.permissions import require_any_role
+from app.core.permissions import ROLE_HIERARCHY, require_any_role
 from app.core.security import UserContext
 
 
@@ -34,7 +34,8 @@ async def _role_name(db, user_id: str) -> str:
     result = await db.execute(
         select(Role.name).join(UserRole).where(UserRole.user_id == user_id)
     )
-    return result.scalar_one_or_none() or "viewer"
+    roles = result.scalars().all()
+    return max(roles, key=lambda item: ROLE_HIERARCHY.get(item, -1), default="viewer")
 
 
 async def _active_super_admin_count(db) -> int:
@@ -87,17 +88,35 @@ async def list_users(
             ]
         }
 
-    from app.database.models.rbac import User
+    from app.database.models.rbac import Role, User, UserRole
     from app.database.session import SessionLocal
     from sqlalchemy import select
 
     async with SessionLocal() as db:
-        result = await db.execute(select(User).order_by(User.created_at.asc()))
-        users = result.scalars().all()
+        rows = (
+            await db.execute(
+                select(User, Role.name)
+                .outerjoin(UserRole, UserRole.user_id == User.user_id)
+                .outerjoin(Role, Role.role_id == UserRole.role_id)
+                .order_by(User.created_at.asc())
+            )
+        ).all()
+        accounts: dict[str, tuple[object, list[str]]] = {}
+        for account, role_name in rows:
+            current = accounts.setdefault(account.user_id, (account, []))
+            if role_name:
+                current[1].append(role_name)
         return {
             "users": [
-                _serialize_user(account, await _role_name(db, account.user_id))
-                for account in users
+                _serialize_user(
+                    account,
+                    max(
+                        roles,
+                        key=lambda item: ROLE_HIERARCHY.get(item, -1),
+                        default="viewer",
+                    ),
+                )
+                for account, roles in accounts.values()
             ]
         }
 

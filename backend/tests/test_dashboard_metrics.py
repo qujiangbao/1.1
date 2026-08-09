@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services import dashboard_service
 from app.services.runtime_metrics import get_runtime_metrics
 
 
@@ -11,6 +12,29 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 ENTERPRISE_SNAPSHOT = BACKEND_ROOT / "data" / "enterprises" / "enterprise_import_clean.json"
 POLICY_CATALOG = BACKEND_ROOT / "data" / "policies_gz_gov" / "_catalog.json"
 PARK_DOCUMENT_INDEX = BACKEND_ROOT / "data" / "park_documents" / "index.json"
+
+
+@pytest.mark.asyncio
+async def test_business_metrics_cache_coalesces_adjacent_dashboard_requests(monkeypatch):
+    from app.database import session as database_session
+
+    calls = 0
+
+    async def load_metrics():
+        nonlocal calls
+        calls += 1
+        return {"total_enterprises": 7, "nested": {"value": 1}}
+
+    monkeypatch.setattr(database_session, "SessionLocal", object())
+    monkeypatch.setattr(dashboard_service, "_BUSINESS_METRICS_CACHE", None)
+    monkeypatch.setattr(dashboard_service, "_load_database_business_metrics", load_metrics)
+
+    first = await dashboard_service._database_business_metrics()
+    first["nested"]["value"] = 99
+    second = await dashboard_service._database_business_metrics()
+
+    assert calls == 1
+    assert second["nested"]["value"] == 1
 
 
 def test_team_status_uses_real_runtime_events_without_database():

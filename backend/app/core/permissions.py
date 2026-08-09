@@ -49,7 +49,17 @@ def require_permission(perm_code: str):
     async def checker(user: UserContext = Depends(require_user)):
         from app.config import get_settings
         if not get_settings().database_enabled:
-            return user  # DB disabled → 允许所有
+            # Keep the same RBAC semantics in lightweight deployments. Auth
+            # disabled mode still receives the built-in super_admin context.
+            from app.database.models.rbac import ROLE_PERMISSION_MAP
+
+            allowed = ROLE_PERMISSION_MAP.get(user.role, [])
+            if "*" not in allowed and perm_code not in allowed:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Missing permission: {perm_code}",
+                )
+            return user
 
         try:
             from app.database.session import SessionLocal
@@ -70,8 +80,11 @@ def require_permission(perm_code: str):
                     )
         except HTTPException:
             raise
-        except Exception:
-            pass  # DB error → allow (fail open in dev)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Permission service unavailable",
+            ) from exc
         return user
     return checker
 

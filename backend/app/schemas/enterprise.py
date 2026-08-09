@@ -7,8 +7,12 @@
 from __future__ import annotations
 
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 # ═══════════════════════════════════════════
@@ -59,7 +63,7 @@ class EnterpriseProfile(BaseModel):
 
     # ── 元数据 ──
     data_source: str = Field(default="mock", description="数据来源: mock|tianyancha|qichacha|government")
-    source_time: Optional[datetime] = Field(default_factory=datetime.utcnow, description="数据获取时间")
+    source_time: Optional[datetime] = Field(default_factory=_utc_now, description="数据获取时间")
     confidence_score: float = Field(default=1.0, ge=0.0, le=1.0, description="数据可信度 0-1")
     evidence: List[Dict[str, Any]] = Field(default_factory=list, description="数据来源证据链")
 
@@ -83,7 +87,7 @@ class RiskEvent(BaseModel):
 
     # ── 元数据 ──
     data_source: str = Field(default="mock", description="通过哪个 Adapter 获取")
-    source_time: Optional[datetime] = Field(default_factory=datetime.utcnow, description="数据获取时间")
+    source_time: Optional[datetime] = Field(default_factory=_utc_now, description="数据获取时间")
     confidence_score: float = Field(default=0.8, ge=0.0, le=1.0, description="事件可信度")
     evidence: List[Dict[str, Any]] = Field(default_factory=list, description="证据: [{type, value, url}]")
 
@@ -117,7 +121,7 @@ class BusinessStatus(BaseModel):
 
     # ── 元数据 ──
     data_source: str = Field(default="mock")
-    source_time: Optional[datetime] = Field(default_factory=datetime.utcnow)
+    source_time: Optional[datetime] = Field(default_factory=_utc_now)
     confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)
     evidence: List[Dict[str, Any]] = Field(default_factory=list)
 
@@ -132,5 +136,5 @@ class EnterpriseSearchResult(BaseModel):
     total: int
     enterprises: List[EnterpriseProfile]
     data_source: str = "mock"
-    source_time: Optional[datetime] = Field(default_factory=datetime.utcnow)
+    source_time: Optional[datetime] = Field(default_factory=_utc_now)
     confidence_score: float = Field(default=0.9)

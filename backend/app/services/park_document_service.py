@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+from threading import RLock
 from typing import Any
 from uuid import uuid4
 
@@ -33,6 +34,7 @@ QUERY_STOP_TERMS = {
     "资料", "资料库", "园区", "查询", "检索", "有哪", "一下子",
     "园区资料库查询", "园区资料库检索",
 }
+_INDEX_LOCK = RLock()
 
 
 def _ensure_dirs() -> None:
@@ -93,79 +95,83 @@ def list_structured_enterprise_records() -> list[dict[str, Any]]:
     material already present in the persistent volume.
     """
     output: list[dict[str, Any]] = []
-    for record in _load_index():
-        if record.get("status") != "READY" or not _matches_purpose(record, "enterprise"):
-            continue
-        structured_path = STRUCTURED_DIR / f"{record['id']}.json"
-        try:
-            if structured_path.exists():
-                payload = json.loads(structured_path.read_text(encoding="utf-8"))
-            else:
-                text_path = TEXT_DIR / f"{record['id']}.txt"
-                if not text_path.exists():
-                    continue
-                payload = _write_structured_payload(
-                    record,
-                    text_path.read_text(encoding="utf-8", errors="ignore"),
+    with _INDEX_LOCK:
+        for record in _load_index():
+            if record.get("status") != "READY" or not _matches_purpose(record, "enterprise"):
+                continue
+            structured_path = STRUCTURED_DIR / f"{record['id']}.json"
+            try:
+                if structured_path.exists():
+                    payload = json.loads(structured_path.read_text(encoding="utf-8"))
+                else:
+                    text_path = TEXT_DIR / f"{record['id']}.txt"
+                    if not text_path.exists():
+                        continue
+                    payload = _write_structured_payload(
+                        record,
+                        text_path.read_text(encoding="utf-8", errors="ignore"),
+                    )
+                output.extend(
+                    item for item in payload.get("enterprises", [])
+                    if isinstance(item, dict) and item.get("name")
                 )
-            output.extend(
-                item for item in payload.get("enterprises", [])
-                if isinstance(item, dict) and item.get("name")
-            )
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
     return output
 
 
 def _load_index() -> list[dict[str, Any]]:
-    _ensure_dirs()
-    if not INDEX_PATH.exists():
-        return []
-    try:
-        payload = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
-        return payload if isinstance(payload, list) else []
-    except (OSError, json.JSONDecodeError):
-        return []
+    with _INDEX_LOCK:
+        _ensure_dirs()
+        if not INDEX_PATH.exists():
+            return []
+        try:
+            payload = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, list) else []
+        except (OSError, json.JSONDecodeError):
+            return []
 
 
 def _save_index(items: list[dict[str, Any]]) -> None:
-    _ensure_dirs()
-    temporary = INDEX_PATH.with_suffix(".tmp")
-    temporary.write_text(
-        json.dumps(items, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    temporary.replace(INDEX_PATH)
+    with _INDEX_LOCK:
+        _ensure_dirs()
+        temporary = INDEX_PATH.with_suffix(f".{uuid4().hex}.tmp")
+        temporary.write_text(
+            json.dumps(items, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary.replace(INDEX_PATH)
 
 
 def list_park_documents() -> list[dict[str, Any]]:
-    items = _load_index()
-    changed = False
-    for record in items:
-        if record.get("status") != "READY":
-            continue
-        structured_path = STRUCTURED_DIR / f"{record['id']}.json"
-        if (
-            structured_path.exists()
-            and "structured_enterprises" in record
-            and "structured_risk_events" in record
-        ):
-            continue
-        text_path = TEXT_DIR / f"{record['id']}.txt"
-        if not text_path.exists():
-            continue
-        try:
-            payload = _write_structured_payload(
-                record,
-                text_path.read_text(encoding="utf-8", errors="ignore"),
-            )
-            record["structured_enterprises"] = payload.get("enterprise_count", 0)
-            record["structured_risk_events"] = payload.get("risk_event_count", 0)
-            changed = True
-        except (OSError, ValueError):
-            continue
-    if changed:
-        _save_index(items)
+    with _INDEX_LOCK:
+        items = _load_index()
+        changed = False
+        for record in items:
+            if record.get("status") != "READY":
+                continue
+            structured_path = STRUCTURED_DIR / f"{record['id']}.json"
+            if (
+                structured_path.exists()
+                and "structured_enterprises" in record
+                and "structured_risk_events" in record
+            ):
+                continue
+            text_path = TEXT_DIR / f"{record['id']}.txt"
+            if not text_path.exists():
+                continue
+            try:
+                payload = _write_structured_payload(
+                    record,
+                    text_path.read_text(encoding="utf-8", errors="ignore"),
+                )
+                record["structured_enterprises"] = payload.get("enterprise_count", 0)
+                record["structured_risk_events"] = payload.get("risk_event_count", 0)
+                changed = True
+            except (OSError, ValueError):
+                continue
+        if changed:
+            _save_index(items)
     return sorted(items, key=lambda item: item["created_at"], reverse=True)
 
 
@@ -189,67 +195,69 @@ async def import_park_document(
     if not parsed.is_valid:
         raise ValueError(parsed.error or "文档无法解析")
     normalized_hash = _content_hash(parsed.raw_text)
-    for existing in _load_index():
-        existing_content_hash = existing.get("content_hash")
-        if not existing_content_hash:
-            existing_text = TEXT_DIR / f"{existing.get('id')}.txt"
-            if existing_text.exists():
-                existing_content_hash = _content_hash(
-                    existing_text.read_text(encoding="utf-8", errors="ignore")
+    with _INDEX_LOCK:
+        items = _load_index()
+        for existing in items:
+            existing_content_hash = existing.get("content_hash")
+            if not existing_content_hash:
+                existing_text = TEXT_DIR / f"{existing.get('id')}.txt"
+                if existing_text.exists():
+                    existing_content_hash = _content_hash(
+                        existing_text.read_text(encoding="utf-8", errors="ignore")
+                    )
+            if (
+                existing.get("status") == "READY"
+                and (
+                    existing.get("file_hash") == parsed.file_hash
+                    or existing_content_hash == normalized_hash
                 )
-        if (
-            existing.get("status") == "READY"
-            and (
-                existing.get("file_hash") == parsed.file_hash
-                or existing_content_hash == normalized_hash
-            )
-        ):
-            return {**existing, "duplicate": True, "duplicate_of": existing.get("id")}
+            ):
+                return {**existing, "duplicate": True, "duplicate_of": existing.get("id")}
 
-    document_id = str(uuid4())
-    stored_path = FILES_DIR / f"{document_id}{suffix}"
-    shutil.move(str(source_path), stored_path)
-    text_path = TEXT_DIR / f"{document_id}.txt"
-    if parsed.raw_text:
-        text_path.write_text(parsed.raw_text, encoding="utf-8")
+        document_id = str(uuid4())
+        stored_path = FILES_DIR / f"{document_id}{suffix}"
+        shutil.move(str(source_path), stored_path)
+        text_path = TEXT_DIR / f"{document_id}.txt"
+        if parsed.raw_text:
+            text_path.write_text(parsed.raw_text, encoding="utf-8")
 
-    record = {
-        "id": document_id,
-        "name": original_name,
-        "category": category,
-        "tags": tags,
-        "format": suffix.lstrip(".").upper(),
-        "file_size": parsed.file_size or stored_path.stat().st_size,
-        "page_count": parsed.page_count,
-        "file_hash": parsed.file_hash,
-        "content_hash": normalized_hash,
-        "status": "READY" if parsed.is_valid else "FAILED",
-        "error": parsed.error,
-        "text_length": len(parsed.raw_text),
-        "excerpt": parsed.raw_text[:260].replace("\n", " ") if parsed.raw_text else "",
-        "created_by": created_by,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    structured = _write_structured_payload(record, parsed.raw_text)
-    record["structured_enterprises"] = structured.get("enterprise_count", 0)
-    record["structured_risk_events"] = structured.get("risk_event_count", 0)
-    items = _load_index()
-    items.append(record)
-    _save_index(items)
+        record = {
+            "id": document_id,
+            "name": original_name,
+            "category": category,
+            "tags": tags,
+            "format": suffix.lstrip(".").upper(),
+            "file_size": parsed.file_size or stored_path.stat().st_size,
+            "page_count": parsed.page_count,
+            "file_hash": parsed.file_hash,
+            "content_hash": normalized_hash,
+            "status": "READY" if parsed.is_valid else "FAILED",
+            "error": parsed.error,
+            "text_length": len(parsed.raw_text),
+            "excerpt": parsed.raw_text[:260].replace("\n", " ") if parsed.raw_text else "",
+            "created_by": created_by,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        structured = _write_structured_payload(record, parsed.raw_text)
+        record["structured_enterprises"] = structured.get("enterprise_count", 0)
+        record["structured_risk_events"] = structured.get("risk_event_count", 0)
+        items.append(record)
+        _save_index(items)
     return record
 
 
 def delete_park_document(document_id: str) -> bool:
-    items = _load_index()
-    record = next((item for item in items if item.get("id") == document_id), None)
-    if record is None:
-        return False
-    suffix = "." + str(record.get("format", "")).lower()
-    (FILES_DIR / f"{document_id}{suffix}").unlink(missing_ok=True)
-    (TEXT_DIR / f"{document_id}.txt").unlink(missing_ok=True)
-    (STRUCTURED_DIR / f"{document_id}.json").unlink(missing_ok=True)
-    _save_index([item for item in items if item.get("id") != document_id])
-    return True
+    with _INDEX_LOCK:
+        items = _load_index()
+        record = next((item for item in items if item.get("id") == document_id), None)
+        if record is None:
+            return False
+        suffix = "." + str(record.get("format", "")).lower()
+        (FILES_DIR / f"{document_id}{suffix}").unlink(missing_ok=True)
+        (TEXT_DIR / f"{document_id}.txt").unlink(missing_ok=True)
+        (STRUCTURED_DIR / f"{document_id}.json").unlink(missing_ok=True)
+        _save_index([item for item in items if item.get("id") != document_id])
+        return True
 
 
 def _query_terms(query: str) -> list[str]:
@@ -293,26 +301,27 @@ def search_park_documents(
     if not terms:
         return []
     ranked: list[tuple[float, dict[str, Any], str]] = []
-    for record in _load_index():
-        if record.get("status") != "READY":
-            continue
-        if not _matches_purpose(record, purpose):
-            continue
-        text_path = TEXT_DIR / f"{record['id']}.txt"
-        if not text_path.exists():
-            continue
-        text = text_path.read_text(encoding="utf-8", errors="ignore")
-        haystack = f"{record.get('name', '')} {' '.join(record.get('tags', []))} {text}".lower()
-        matched_terms = [term for term in terms if term in haystack]
-        hit_count = sum(haystack.count(term) for term in matched_terms)
-        if hit_count <= 0:
-            continue
-        first_positions = [haystack.find(term) for term in terms if haystack.find(term) >= 0]
-        start = max(0, (min(first_positions) if first_positions else 0) - 100)
-        snippet = text[start:start + 900]
-        coverage = len(matched_terms) / max(1, len(terms))
-        score = min(0.99, 0.45 + coverage * 0.45 + min(0.09, hit_count / 100))
-        ranked.append((score, record, snippet))
+    with _INDEX_LOCK:
+        for record in _load_index():
+            if record.get("status") != "READY":
+                continue
+            if not _matches_purpose(record, purpose):
+                continue
+            text_path = TEXT_DIR / f"{record['id']}.txt"
+            if not text_path.exists():
+                continue
+            text = text_path.read_text(encoding="utf-8", errors="ignore")
+            haystack = f"{record.get('name', '')} {' '.join(record.get('tags', []))} {text}".lower()
+            matched_terms = [term for term in terms if term in haystack]
+            hit_count = sum(haystack.count(term) for term in matched_terms)
+            if hit_count <= 0:
+                continue
+            first_positions = [haystack.find(term) for term in terms if haystack.find(term) >= 0]
+            start = max(0, (min(first_positions) if first_positions else 0) - 100)
+            snippet = text[start:start + 900]
+            coverage = len(matched_terms) / max(1, len(terms))
+            score = min(0.99, 0.45 + coverage * 0.45 + min(0.09, hit_count / 100))
+            ranked.append((score, record, snippet))
 
     ranked.sort(key=lambda item: item[0], reverse=True)
     return [

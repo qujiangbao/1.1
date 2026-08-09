@@ -119,7 +119,7 @@ class LLMGateway:
                     max_tokens: int = 2000, temperature: float = 0.2) -> LLMResult:
         import asyncio
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(self.invoke(agent_name, task_type, prompt, max_tokens, temperature))
         import concurrent.futures

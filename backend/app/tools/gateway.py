@@ -195,7 +195,6 @@ class ToolGateway:
 
     def _mock_scoring(self, params: Dict) -> Dict:
         """Mock: 投资评分 — 返回模拟评分数据"""
-        import hashlib
         eid = str(params.get("enterprise_id", ""))
         base = sum(ord(c) for c in eid) % 30
         score = min(95, 70 + base)

@@ -27,6 +27,7 @@ USER_AGENT = "Mozilla/5.0 GuangzhouPolicyAgent/2.0"
 HREF_PATTERN = re.compile(r"""href\s*=\s*["']([^"'#]+)["']""", re.I)
 TITLE_PATTERN = re.compile(r"^# (?!来源\s*:)(.+?)\s*$", re.MULTILINE)
 MAX_WORKERS = 3
+MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -84,10 +85,20 @@ class _VisibleTextParser(HTMLParser):
 
 
 def _is_allowed_url(url: str) -> bool:
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
-    return parsed.scheme == "https" and (
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and port in (None, 443)
+        and parsed.username is None
+        and parsed.password is None
+        and (
         host == "gz.gov.cn" or host.endswith(".gz.gov.cn")
+        )
     )
 
 
@@ -342,14 +353,30 @@ class PolicyCrawlerEngine:
         return sources
 
     def _request_text(self, url: str) -> str:
-        response = httpx.get(
+        if not _is_allowed_url(url):
+            raise ValueError(f"禁止抓取非广州政府来源: {url}")
+        with httpx.stream(
+            "GET",
             url,
             timeout=30,
             follow_redirects=True,
             headers={"User-Agent": USER_AGENT},
-        )
-        response.raise_for_status()
-        return response.text
+        ) as response:
+            response.raise_for_status()
+            if not _is_allowed_url(str(response.url)):
+                raise ValueError(f"政府来源重定向到非白名单地址: {response.url}")
+            content_length = int(response.headers.get("content-length") or 0)
+            if content_length > MAX_RESPONSE_BYTES:
+                raise ValueError("政策页面超过允许大小")
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in response.iter_bytes():
+                total += len(chunk)
+                if total > MAX_RESPONSE_BYTES:
+                    raise ValueError("政策页面超过允许大小")
+                chunks.append(chunk)
+            encoding = response.encoding or "utf-8"
+            return b"".join(chunks).decode(encoding, errors="replace")
 
     def _discover(self, source: PolicySource, pages: int) -> set[str]:
         links: set[str] = set()

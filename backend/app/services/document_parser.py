@@ -4,11 +4,13 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
+from zipfile import BadZipFile, ZipFile, is_zipfile
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +35,17 @@ class DocumentParser:
     """文档解析器"""
 
     SUPPORTED = {".pdf", ".docx", ".pptx", ".html", ".htm", ".txt", ".md"}
+    MAX_FILE_BYTES = 25 * 1024 * 1024
+    MAX_EXTRACTED_CHARS = 5_000_000
+    MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
+    MAX_ARCHIVE_MEMBERS = 2_000
+    MAX_PDF_PAGES = 1_000
 
     async def parse(self, file_path: str) -> ParsedDocument:
+        """Parse a document off the event loop because readers are blocking."""
+        return await asyncio.to_thread(self._parse_sync, file_path)
+
+    def _parse_sync(self, file_path: str) -> ParsedDocument:
         path = Path(file_path)
         if not path.exists():
             return ParsedDocument(raw_text="", filename=path.name, error=f"File not found: {file_path}")
@@ -44,20 +55,34 @@ class DocumentParser:
             return ParsedDocument(raw_text="", filename=path.name, error=f"Unsupported format: {ext}")
 
         file_size = path.stat().st_size
-        file_hash = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+        if file_size > self.MAX_FILE_BYTES:
+            return ParsedDocument(
+                raw_text="",
+                filename=path.name,
+                file_size=file_size,
+                error="Document exceeds the 25 MB limit",
+            )
+        file_hash = self._hash_file(path)
 
         try:
             if ext == ".pdf":
+                if not self._has_prefix(path, b"%PDF-"):
+                    raise ValueError("File content is not a valid PDF")
                 text, pages = self._parse_pdf(str(path))
             elif ext == ".docx":
+                self._validate_office_archive(path)
                 text, pages = self._parse_docx(str(path))
             elif ext == ".pptx":
+                self._validate_office_archive(path)
                 text, pages = self._parse_pptx(str(path))
             elif ext in (".html", ".htm"):
                 text, pages = self._parse_html(str(path))
             else:
                 text = path.read_text(encoding="utf-8")
                 pages = 1
+
+            if len(text) > self.MAX_EXTRACTED_CHARS:
+                raise ValueError("Extracted document text exceeds the safe limit")
 
             return ParsedDocument(
                 raw_text=text.strip(),
@@ -67,15 +92,55 @@ class DocumentParser:
                 file_size=file_size,
                 filename=path.name,
             )
-        except Exception as e:
-            logger.error(f"Parse failed for {file_path}: {e}")
-            return ParsedDocument(raw_text="", filename=path.name, error=str(e))
+        except Exception as exc:
+            logger.exception("Document parse failed for filename=%s", path.name)
+            detail = (
+                str(exc)
+                if isinstance(exc, (ValueError, UnicodeError, BadZipFile))
+                else "Document parsing failed"
+            )
+            return ParsedDocument(raw_text="", filename=path.name, error=detail)
+
+    @staticmethod
+    def _hash_file(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+        return digest.hexdigest()[:16]
+
+    @staticmethod
+    def _has_prefix(path: Path, prefix: bytes) -> bool:
+        with path.open("rb") as stream:
+            return stream.read(len(prefix)) == prefix
+
+    def _validate_office_archive(self, path: Path) -> None:
+        """Reject disguised Office files and archives with unsafe expansion."""
+        if not is_zipfile(path):
+            raise ValueError("File content is not a valid Office document")
+        with ZipFile(path) as archive:
+            members = archive.infolist()
+            if len(members) > self.MAX_ARCHIVE_MEMBERS:
+                raise ValueError("Office document contains too many archive members")
+            expanded_size = sum(member.file_size for member in members)
+            if expanded_size > self.MAX_ARCHIVE_BYTES:
+                raise ValueError("Office document expands beyond the safe limit")
 
     def _parse_pdf(self, path: str) -> tuple[str, int]:
         try:
             from pypdf import PdfReader
             doc = PdfReader(path)
-            text = "\n\n".join(page.extract_text() or "" for page in doc.pages)
+            if len(doc.pages) > self.MAX_PDF_PAGES:
+                raise ValueError("PDF contains too many pages")
+            parts: list[str] = []
+            total = 0
+            for page in doc.pages:
+                page_text = page.extract_text() or ""
+                total += len(page_text)
+                if total > self.MAX_EXTRACTED_CHARS:
+                    raise ValueError("Extracted document text exceeds the safe limit")
+                parts.append(page_text)
+            text = "\n\n".join(parts)
             return text, len(doc.pages)
         except ImportError:
             raise ImportError("需要安装 pypdf 来解析 PDF")

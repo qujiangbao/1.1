@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-import tempfile
+from tempfile import NamedTemporaryFile
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
@@ -45,12 +45,23 @@ async def upload_document(
     normalized_category = category.strip() or "园区综合资料"
     if normalized_category not in ALLOWED_CATEGORIES:
         raise HTTPException(status_code=422, detail="资料分类无效")
-    payload = await file.read(MAX_FILE_SIZE + 1)
-    if len(payload) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="单个文件不能超过 25 MB")
-    temporary = Path(tempfile.gettempdir()) / f"park-upload-{user.user_id}-{filename}"
-    temporary.write_bytes(payload)
+    temporary: Path | None = None
     try:
+        total = 0
+        with NamedTemporaryFile(
+            prefix="park-upload-",
+            suffix=suffix,
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            while chunk := await file.read(1024 * 1024):
+                total += len(chunk)
+                if total > MAX_FILE_SIZE:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="单个文件不能超过 25 MB",
+                    )
+                handle.write(chunk)
         record = await import_park_document(
             temporary,
             original_name=filename,
@@ -61,7 +72,9 @@ async def upload_document(
     except ValueError as exc:
         raise HTTPException(status_code=415, detail=str(exc)) from exc
     finally:
-        temporary.unlink(missing_ok=True)
+        await file.close()
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return {"success": True, "data": record}
 
 

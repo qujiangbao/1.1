@@ -1,5 +1,5 @@
 """BI Agent Nodes"""
-from typing import TypedDict, List, Optional, Dict, Any
+from typing import TypedDict, Optional, Dict, Any
 from langgraph.graph import StateGraph, END
 
 

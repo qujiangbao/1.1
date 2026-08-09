@@ -32,7 +32,9 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
 
     # Auth
-    jwt_secret: str = "change-this"
+    # Long enough to avoid weak-HMAC defaults during local development. The
+    # production validator still rejects the ``change-`` placeholder.
+    jwt_secret: str = "change-this-development-only-secret"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440
     auth_enabled: bool = False
@@ -123,6 +125,14 @@ class Settings(BaseSettings):
             )
         return value
 
+    @field_validator("jwt_algorithm")
+    @classmethod
+    def validate_jwt_algorithm(cls, value: str):
+        normalized = value.strip().upper()
+        if normalized not in {"HS256", "HS384", "HS512"}:
+            raise ValueError("JWT_ALGORITHM must be HS256, HS384, or HS512")
+        return normalized
+
     @field_validator("supervisor_checkpointer")
     @classmethod
     def validate_supervisor_checkpointer(cls, value: str):
@@ -146,6 +156,14 @@ class Settings(BaseSettings):
 
             if is_placeholder(self.jwt_secret) or len(self.jwt_secret) < 32:
                 raise ValueError("JWT_SECRET must be at least 32 characters in production")
+            if "*" in self.cors_origins or "null" in self.cors_origins:
+                raise ValueError(
+                    "CORS_ORIGINS must list explicit origins in production"
+                )
+            if not self.database_enabled:
+                raise ValueError("DATABASE_ENABLED must be true in production")
+            if not self.auth_enabled:
+                raise ValueError("AUTH_ENABLED must be true in production")
             if self.auth_enabled and (
                 self.admin_password == "admin" or is_placeholder(self.admin_password)
             ):

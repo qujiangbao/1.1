@@ -18,6 +18,13 @@ interface DataModeContextValue {
 
 const STORAGE_KEY = "industrial-park-data-mode";
 const DataModeContext = createContext<DataModeContextValue | null>(null);
+const REAL_DATA_MODE: DataModeContextValue = {
+  mode: "real",
+  isDemo: false,
+  ready: true,
+  setMode: () => undefined,
+  resetDemo: () => undefined,
+};
 
 export function DataModeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
@@ -25,16 +32,8 @@ export function DataModeProvider({ children }: { children: React.ReactNode }) {
     window.localStorage.removeItem(STORAGE_KEY);
   }, []);
 
-  const value: DataModeContextValue = {
-    mode: "real",
-    isDemo: false,
-    ready: true,
-    setMode: () => undefined,
-    resetDemo: () => undefined,
-  };
-
   return (
-    <DataModeContext.Provider value={value}>
+    <DataModeContext.Provider value={REAL_DATA_MODE}>
       {children}
     </DataModeContext.Provider>
   );

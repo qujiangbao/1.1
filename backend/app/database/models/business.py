@@ -1,7 +1,6 @@
 """Enterprise models — 对应 Database_Physical_Schema_V1.0"""
 from sqlalchemy import Column, String, Integer, Float, Text, Date, DateTime, Boolean, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY
-from sqlalchemy.orm import relationship
 from app.database.vector_type import Vector
 from app.database.session import Base
 from datetime import datetime
@@ -105,7 +104,7 @@ class PolicyChunk(Base):
     content_hash = Column(String(64))
     token_count = Column(Integer)
     embedding = Column(Vector(1536))
-    metadata_ = Column("metadata", JSONB, default={})
+    metadata_ = Column("metadata", JSONB, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

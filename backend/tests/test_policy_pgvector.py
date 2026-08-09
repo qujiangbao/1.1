@@ -35,7 +35,7 @@ def test_alembic_head_preserves_the_full_investment_migration_chain():
     config.set_main_option("script_location", "migrations")
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "008_policy_crawler"
+    assert scripts.get_current_head() == "009_business_indexes"
     assert (
         scripts.get_revision("003_investment_candidate").down_revision
         == "002_policy_pgvector"
@@ -59,6 +59,10 @@ def test_alembic_head_preserves_the_full_investment_migration_chain():
     assert (
         scripts.get_revision("008_policy_crawler").down_revision
         == "007_recommendation_exposure"
+    )
+    assert (
+        scripts.get_revision("009_business_indexes").down_revision
+        == "008_policy_crawler"
     )
 
 

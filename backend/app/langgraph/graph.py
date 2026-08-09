@@ -4,8 +4,7 @@ import logging
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
-from app.langgraph.state import SupervisorState, TaskNode, TraceStep
-from app.agents.registry import find_agent_by_capability, AGENT_REGISTRY
+from app.langgraph.state import SupervisorState
 
 logger = logging.getLogger(__name__)
 

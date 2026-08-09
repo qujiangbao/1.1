@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class PolicyRetriever:
                     self._crawl4ai_data = PolicyCrawl4AIData()
                 chunks = self._crawl4ai_data.search(query=query, filters=filters, top_k=top_k)
                 return {"chunks": chunks, "total": len(chunks), "mode": "crawl4ai"}
-            except Exception as e:
+            except Exception:
                 logger.exception("Crawl4AI policy search failed")
                 if not self.allow_mock_fallback:
                     raise
@@ -50,7 +50,7 @@ class PolicyRetriever:
         # pgvector 模式
         try:
             return await self._pgvector_hybrid_search(query, top_k, filters)
-        except Exception as e:
+        except Exception:
             logger.exception("pgvector search failed")
             if not self.allow_mock_fallback:
                 raise

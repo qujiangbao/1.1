@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Alert,
@@ -141,6 +141,12 @@ export default function AgentWorkspacePage() {
   const [hydrated, setHydrated] = useState(false);
   const [investScenarioId, setInvestScenarioId] = useState("");
   const [investReady, setInvestReady] = useState(false);
+  const streamRef = useRef<EventSource | null>(null);
+
+  useEffect(() => () => {
+    streamRef.current?.close();
+    streamRef.current = null;
+  }, []);
 
   // Persist completed task state to sessionStorage so it survives page navigation
   const STORAGE_KEY = "workspace_last_task";
@@ -226,6 +232,12 @@ export default function AgentWorkspacePage() {
         setCurrentPhase(2);
         let terminal = false;
         const eventSource = new EventSource(resolveApiUrl(data.stream_url, API));
+        streamRef.current?.close();
+        streamRef.current = eventSource;
+        const closeStream = () => {
+          eventSource.close();
+          if (streamRef.current === eventSource) streamRef.current = null;
+        };
 
         eventSource.addEventListener("snapshot", (event) => {
           const snapshot = JSON.parse((event as MessageEvent).data);
@@ -268,7 +280,7 @@ export default function AgentWorkspacePage() {
           setCurrentPhase(3);
           finishAgents(used);
           setRunning(false);
-          eventSource.close();
+          closeStream();
 
           // 后台自动创建招商场景，让驾驶舱立即可用
           if (used.includes("InvestmentAgent")) {
@@ -303,7 +315,7 @@ export default function AgentWorkspacePage() {
             ),
           );
           setRunning(false);
-          eventSource.close();
+          closeStream();
         });
 
         eventSource.onerror = () => {
@@ -318,7 +330,7 @@ export default function AgentWorkspacePage() {
             ),
           );
           setRunning(false);
-          eventSource.close();
+          closeStream();
         };
         return;
       }

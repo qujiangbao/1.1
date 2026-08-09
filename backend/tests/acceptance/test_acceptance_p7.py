@@ -7,7 +7,7 @@ Usage:
     PYTHONPATH=. .venv/bin/python3 tests/acceptance/test_acceptance_p7.py
 """
 
-import os, sys, ast, asyncio
+import os, sys, ast
 import pytest
 
 BACKEND = os.path.join(os.path.dirname(__file__), "..", "..")

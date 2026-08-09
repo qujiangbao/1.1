@@ -1,5 +1,7 @@
 """Health Check (P8: split liveness/readiness/health)"""
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from app.core.permissions import require_any_role
+from app.core.security import UserContext
 from app.core.llm_warmup import get_warmup_status
 
 router = APIRouter()
@@ -77,7 +79,9 @@ async def health_ready():
 
 
 @router.get("/health")
-async def health():
+async def health(
+    _user: UserContext = Depends(require_any_role("super_admin", "park_manager")),
+):
     """完整健康信息 — 监控面板用"""
     from app.config import get_settings
     s = get_settings()
@@ -107,14 +111,20 @@ async def health():
         components["data_mode"] = "runtime"
 
     return {
-        "status": "healthy" if components.get("database", "disabled") != "error" else "degraded",
+        "status": (
+            "healthy"
+            if components.get("database", "disabled") in {"connected", "disabled"}
+            else "degraded"
+        ),
         "service": "Industrial Park Agent v1.3",
         "components": components,
     }
 
 
 @router.get("/health/warmup")
-async def health_warmup():
+async def health_warmup(
+    _user: UserContext = Depends(require_any_role("super_admin", "park_manager")),
+):
     """LLM warmup status"""
     ws = get_warmup_status()
     return {
@@ -123,5 +133,5 @@ async def health_warmup():
         "warmup_state": ws.state,
         "warmup_time_ms": ws.warmup_time_ms,
         "model": ws.model,
-        "error": ws.error,
+        "error": "Model warmup failed" if ws.error else None,
     }

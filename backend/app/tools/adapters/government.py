@@ -1,8 +1,7 @@
 """GovernmentAdapter — 国家企业信用信息公示系统适配器"""
 from __future__ import annotations
 
-from datetime import datetime
-from typing import List, Optional
+from typing import List
 import logging
 
 from app.schemas.enterprise import EnterpriseProfile, RiskEvent, BusinessStatus, EnterpriseSearchResult
