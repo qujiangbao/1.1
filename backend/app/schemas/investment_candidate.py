@@ -39,6 +39,11 @@ PolicyConditionStatus = Literal[
     "NEEDS_MANUAL_REVIEW",
     "NOT_APPLICABLE",
 ]
+PolicyConditionPreviewStatus = Literal[
+    "SATISFIED",
+    "UNSATISFIED",
+    "UNKNOWN",
+]
 
 
 class EvidenceItem(BaseModel):
@@ -82,6 +87,8 @@ class PolicyConditionResult(BaseModel):
     reason: str
     source_text: Optional[str] = None
     evidence_ids: List[str] = Field(default_factory=list)
+    rule_review_status: Optional[Literal["DRAFT", "REVIEWED"]] = None
+    preview_status: Optional[PolicyConditionPreviewStatus] = None
 
 
 class PolicyMatch(BaseModel):

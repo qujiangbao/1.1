@@ -87,7 +87,7 @@ export default function ParkDocumentsPage() {
         } else if (record.status === "READY") {
           setDocuments((current) => [record, ...current]);
           const structured = record.structured_enterprises
-            ? `，识别 ${record.structured_enterprises} 家企业、${record.structured_risk_events || 0} 条风险事件`
+            ? `，识别 ${record.structured_enterprises} 家企业、${record.structured_risk_events || 0} 条风险事件；企业已自动加入政策预匹配范围`
             : "";
           message.success(`${record.name} 已解析并加入资料库${structured}`);
         } else {

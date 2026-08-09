@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Button,
@@ -13,6 +13,7 @@ import {
   Typography,
   Empty,
   List,
+  Segmented,
   message,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -40,9 +41,9 @@ import type {
 const { Paragraph, Text } = Typography;
 
 const MATCH_LABELS = {
-  ELIGIBLE: "符合",
-  POTENTIALLY_ELIGIBLE: "可能符合",
-  INELIGIBLE: "不符合",
+  ELIGIBLE: "已确认符合",
+  POTENTIALLY_ELIGIBLE: "初步符合",
+  INELIGIBLE: "已确认不符合",
   RELATED: "仅相关",
   UNKNOWN: "待核验",
 } as const;
@@ -70,6 +71,40 @@ function readableValue(value: unknown) {
   return String(value);
 }
 
+function enterpriseMatchDisplay(item: PolicyCandidateEligibilityItem) {
+  if (item.decision_basis === "PRELIMINARY" && item.preliminary_outcome === "NO_MATCH") {
+    return { label: "初步不符合", color: "orange" } as const;
+  }
+  if (item.preliminary_outcome === "INSUFFICIENT") {
+    return { label: "待补资料", color: "default" } as const;
+  }
+  return {
+    label: MATCH_LABELS[item.match_type],
+    color: MATCH_COLORS[item.match_type],
+  } as const;
+}
+
+function conditionDisplay(condition: PolicyCandidateEligibilityItem["condition_results"][number]) {
+  if (condition.status === "NEEDS_MANUAL_REVIEW") {
+    if (condition.preview_status === "SATISFIED") {
+      return { label: "预匹配满足", color: "processing" } as const;
+    }
+    if (condition.preview_status === "UNSATISFIED") {
+      return { label: "预匹配不满足", color: "orange" } as const;
+    }
+    return { label: "待补证/规则待复核", color: "warning" } as const;
+  }
+  return {
+    label: CONDITION_LABELS[condition.status],
+    color:
+      condition.status === "SATISFIED"
+        ? "success"
+        : condition.status === "UNSATISFIED"
+          ? "error"
+          : "warning",
+  } as const;
+}
+
 const CONDITION_TEMPLATE: ManagedPolicyCondition[] = [
   {
     condition_code: "REGISTERED_REGION",
@@ -90,6 +125,7 @@ export default function PolicyManagementPage() {
   const [items, setItems] = useState<ManagedPolicy[]>([]);
   const [total, setTotal] = useState(0);
   const [query, setQuery] = useState("");
+  const [policyView, setPolicyView] = useState<"ELIGIBILITY" | "REFERENCE" | "ALL">("ELIGIBILITY");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [selected, setSelected] = useState<ManagedPolicy | null>(null);
@@ -98,6 +134,7 @@ export default function PolicyManagementPage() {
   const [eligibilityReport, setEligibilityReport] =
     useState<PolicyCandidateEligibilityReport | null>(null);
   const [eligibilityLoading, setEligibilityLoading] = useState(false);
+  const [enterpriseQuery, setEnterpriseQuery] = useState("");
   const [error, setError] = useState("");
 
   const load = async (nextQuery = query) => {
@@ -170,6 +207,7 @@ export default function PolicyManagementPage() {
   const openEligibility = async (policy: ManagedPolicy) => {
     setEligibilityPolicy(policy);
     setEligibilityReport(null);
+    setEnterpriseQuery("");
     setEligibilityLoading(true);
     try {
       setEligibilityReport(await getPolicyCandidateEligibility(policy.policy_id));
@@ -179,6 +217,23 @@ export default function PolicyManagementPage() {
       setEligibilityLoading(false);
     }
   };
+
+  const filteredEnterprises = useMemo(() => {
+    if (!eligibilityReport) return [];
+    const token = enterpriseQuery.trim().toLowerCase();
+    if (!token) return eligibilityReport.items;
+    return eligibilityReport.items.filter((item) =>
+      `${item.enterprise_name} ${item.enterprise_id}`.toLowerCase().includes(token),
+    );
+  }, [eligibilityReport, enterpriseQuery]);
+
+  const filteredPolicies = useMemo(() => {
+    if (policyView === "ALL") return items;
+    if (policyView === "ELIGIBILITY") {
+      return items.filter((item) => item.eligibility_mode === "ELIGIBILITY");
+    }
+    return items.filter((item) => item.eligibility_mode !== "ELIGIBILITY");
+  }, [items, policyView]);
 
   const columns: ColumnsType<ManagedPolicy> = [
     {
@@ -195,20 +250,28 @@ export default function PolicyManagementPage() {
     },
     { title: "发布部门", dataIndex: "department", width: 190, render: (v) => v || "—" },
     {
-      title: "条件复核（非企业数）",
-      width: 205,
+      title: "自动匹配状态",
+      width: 230,
       render: (_, record) => {
         const reviewed = record.eligibility_conditions.filter(
           (condition) => condition.review_status === "REVIEWED",
         ).length;
         const isTemplate = record.conditions_reviewed_by === "template_suggestion";
+        if (record.eligibility_mode !== "ELIGIBILITY") {
+          return (
+            <Space direction="vertical" size={2}>
+              <Tag>仅供政策检索</Tag>
+              <Text type="secondary">{record.eligibility_mode_reason}</Text>
+            </Space>
+          );
+        }
         return (
-          <Space>
-            <Tag color={reviewed && !isTemplate ? "success" : "warning"}>
-              {isTemplate ? "模板待核对" : `人工已复核 ${reviewed}`}
+          <Space direction="vertical" size={2}>
+            <Tag color={reviewed && !isTemplate ? "success" : "processing"}>
+              {reviewed && !isTemplate ? "自动匹配 · 规则已确认" : "自动预匹配 · 规则待复核"}
             </Tag>
             <Text type="secondary">
-              共 {record.eligibility_conditions.length} 条
+              {reviewed}/{record.eligibility_conditions.length} 条规则已人工确认
             </Text>
           </Space>
         );
@@ -223,18 +286,23 @@ export default function PolicyManagementPage() {
     },
     {
       title: "操作",
-      width: 250,
+      width: 280,
       render: (_, record) => (
         <Space>
-          <Button icon={<TeamOutlined />} onClick={() => void openEligibility(record)}>
-            谁符合
+          <Button
+            type="primary"
+            icon={<TeamOutlined />}
+            disabled={record.eligibility_mode !== "ELIGIBILITY"}
+            onClick={() => void openEligibility(record)}
+          >
+            查看匹配企业
           </Button>
           <Button
             icon={<EditOutlined />}
-            disabled={!canWrite}
+            disabled={!canWrite || record.eligibility_mode !== "ELIGIBILITY"}
             onClick={() => openEditor(record)}
           >
-            资格规则审核
+            规则治理
           </Button>
         </Space>
       ),
@@ -245,14 +313,14 @@ export default function PolicyManagementPage() {
     <div>
       <PageHeader
         title="惠企政策库"
-        description="维护政策申报条件与人工复核状态；只有已复核条件才允许进入逐企业自动资格核验。"
+        description="企业资料导入后自动参与政策预匹配；从政策反查具体企业、匹配条件和证据缺口。"
         extra={canUpdatePolicies ? <Button href="/management/policy-updates" icon={<SyncOutlined />}>政策更新中心</Button> : undefined}
       />
       <Alert
         type="info"
         showIcon
-        message="政策相关不等于具备申报资格"
-        description="表格中的数量是政策条件条数，不是符合企业数。点击“谁符合”查看招商候选池中哪些企业曾召回该政策，以及每项条件的要求值、企业实际值和核验依据。DRAFT 条件只提示人工复核，REVIEWED 条件才允许确定性计算。"
+        message="不需要逐条审核全部政策，也不需要逐家审核企业"
+        description="系统会读取园区企业目录（含新导入资料）并自动预匹配。点击“查看匹配企业”可查看谁初步符合、为什么符合以及缺少什么证据；管理员只需在需要正式资格结论时治理政策规则。公示、征求意见、采购和结果类文件仅供检索，不显示资格匹配。"
         style={{ marginBottom: 16 }}
       />
       {error && (
@@ -266,37 +334,48 @@ export default function PolicyManagementPage() {
         />
       )}
       <Card
-        title={`政策目录 · ${total} 条`}
+        title={`政策目录 · 当前 ${filteredPolicies.length} 条 / 全部 ${total} 条`}
         extra={
-          <Space.Compact>
-            <Input
-              value={query}
-              allowClear
-              placeholder="政策名称、部门或ID"
-              onChange={(event) => setQuery(event.target.value)}
-              onClear={() => { setQuery(""); void load(""); }}
-              onPressEnter={() => void load()}
+          <Space wrap>
+            <Segmented
+              value={policyView}
+              onChange={(value) => setPolicyView(value as typeof policyView)}
+              options={[
+                { label: "可匹配政策", value: "ELIGIBILITY" },
+                { label: "仅供检索", value: "REFERENCE" },
+                { label: "全部", value: "ALL" },
+              ]}
             />
-            <Button icon={<SearchOutlined />} loading={loading} onClick={() => void load()}>
-              查询
-            </Button>
-          </Space.Compact>
+            <Space.Compact>
+              <Input
+                value={query}
+                allowClear
+                placeholder="政策名称、部门或ID"
+                onChange={(event) => setQuery(event.target.value)}
+                onClear={() => { setQuery(""); void load(""); }}
+                onPressEnter={() => void load()}
+              />
+              <Button icon={<SearchOutlined />} loading={loading} onClick={() => void load()}>
+                查询
+              </Button>
+            </Space.Compact>
+          </Space>
         }
       >
         <Table
           rowKey="policy_id"
           loading={loading}
           columns={columns}
-          dataSource={items}
+          dataSource={filteredPolicies}
           pagination={{ pageSize: 20, showSizeChanger: false, showTotal: (value) => `共 ${value} 条` }}
           scroll={{ x: 1120 }}
-          locale={{ emptyText: <Empty description={query ? "没有匹配的政策" : "暂无政策数据"} /> }}
+          locale={{ emptyText: <Empty description={query ? "没有匹配的政策" : "当前分类暂无政策"} /> }}
         />
       </Card>
 
       <Modal
         width={860}
-        title={selected ? `资格规则审核 · ${selected.title}` : "资格规则审核"}
+        title={selected ? `政策资格规则治理 · ${selected.title}` : "政策资格规则治理"}
         open={Boolean(selected)}
         confirmLoading={saving}
         okText="校验并保存"
@@ -312,6 +391,9 @@ export default function PolicyManagementPage() {
         )}
       >
         <Paragraph type="secondary">
+          这里审核的是 AI 从政策原文提取的规则，不是逐家审核企业。规则为 DRAFT 时系统仍会自动预匹配，但只显示“初步”结论；改为 REVIEWED 后才允许输出确定性资格结果。
+        </Paragraph>
+        <Paragraph type="secondary">
           每项需包含 condition_code、label、field、operator、mandatory、
           review_status 和政策原文 source_text。
         </Paragraph>
@@ -326,7 +408,7 @@ export default function PolicyManagementPage() {
 
       <Modal
         width={1040}
-        title={eligibilityPolicy ? `谁符合 · ${eligibilityPolicy.title}` : "谁符合"}
+        title={eligibilityPolicy ? `匹配企业 · ${eligibilityPolicy.title}` : "匹配企业"}
         open={Boolean(eligibilityPolicy)}
         footer={<Button onClick={() => setEligibilityPolicy(null)}>关闭</Button>}
         onCancel={() => setEligibilityPolicy(null)}
@@ -338,27 +420,37 @@ export default function PolicyManagementPage() {
             <Alert
               type={eligibilityReport.reviewed_condition_count ? "info" : "warning"}
               showIcon
-              message={`核验范围：招商候选池 ${eligibilityReport.scope_candidate_count} 家；与本政策相关 ${eligibilityReport.relevant_candidate_count} 家`}
+              message={`自动匹配范围：园区企业目录 ${eligibilityReport.scope_enterprise_count} 家；已计算 ${eligibilityReport.evaluated_enterprise_count} 家`}
               description={
                 eligibilityReport.reviewed_condition_count
-                  ? `当前共 ${eligibilityReport.condition_count} 条政策条件，其中 ${eligibilityReport.reviewed_condition_count} 条已人工复核。只有全部已复核强制条件都有企业证据支持，才显示“符合”。`
-                  : "当前没有经过人工复核的政策条件，因此不能判定任何企业“符合”；下方只显示相关企业和待核对项。"
+                  ? `当前共 ${eligibilityReport.condition_count} 条政策规则，其中 ${eligibilityReport.reviewed_condition_count} 条已人工确认。已确认规则可输出正式结论，其余规则继续显示自动预匹配结果。`
+                  : "当前规则尚未人工确认，但系统已使用导入的企业字段和证据完成自动预匹配；结果明确标记为“初步”，不会冒充正式资格结论。"
               }
               style={{ marginBottom: 14 }}
             />
             <Space wrap style={{ marginBottom: 14 }}>
-              <Tag color="success">符合 {eligibilityReport.eligible_count} 家</Tag>
-              <Tag color="warning">待补证/待核验 {eligibilityReport.potential_count} 家</Tag>
-              <Tag color="error">不符合 {eligibilityReport.ineligible_count} 家</Tag>
+              <Tag color="success">已确认符合 {eligibilityReport.eligible_count} 家</Tag>
+              <Tag color="processing">初步符合 {eligibilityReport.potential_count} 家</Tag>
+              <Tag color="orange">初步不符合 {eligibilityReport.preliminary_ineligible_count} 家</Tag>
+              <Tag color="error">已确认不符合 {eligibilityReport.ineligible_count} 家</Tag>
+              <Tag>待补资料 {eligibilityReport.insufficient_count} 家</Tag>
             </Space>
+            <Input
+              allowClear
+              value={enterpriseQuery}
+              prefix={<SearchOutlined />}
+              placeholder="按企业名称或企业ID查找"
+              onChange={(event) => setEnterpriseQuery(event.target.value)}
+              style={{ marginBottom: 14 }}
+            />
             <Table<PolicyCandidateEligibilityItem>
               rowKey="enterprise_id"
               size="small"
-              pagination={false}
-              dataSource={eligibilityReport.items}
+              pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (value) => `共 ${value} 家` }}
+              dataSource={filteredEnterprises}
               locale={{
                 emptyText: (
-                  <Empty description="候选池中尚无企业完成该政策的相关性检索" />
+                  <Empty description={enterpriseQuery ? "没有找到该企业" : "园区企业目录中暂无可匹配数据"} />
                 ),
               }}
               columns={[
@@ -375,10 +467,11 @@ export default function PolicyManagementPage() {
                 {
                   title: "资格判断",
                   dataIndex: "match_type",
-                  width: 110,
-                  render: (value: PolicyCandidateEligibilityItem["match_type"]) => (
-                    <Tag color={MATCH_COLORS[value]}>{MATCH_LABELS[value]}</Tag>
-                  ),
+                  width: 130,
+                  render: (_, record) => {
+                    const display = enterpriseMatchDisplay(record);
+                    return <Tag color={display.color}>{display.label}</Tag>;
+                  },
                 },
                 {
                   title: "为什么",
@@ -388,9 +481,10 @@ export default function PolicyManagementPage() {
                       {(record.match_score != null || record.matched_terms.length > 0) && (
                         <div>
                           <Text type="secondary">
-                            {record.match_score != null ? `相关度 ${Math.round(record.match_score)}%` : ""}
+                            {record.match_score != null ? `条件覆盖 ${Math.round(record.match_score)}%` : ""}
                             {record.match_score != null && record.matched_terms.length ? " · " : ""}
-                            {record.matched_terms.length ? `命中：${record.matched_terms.join("、")}` : ""}
+                            {record.matched_terms.length ? `满足：${record.matched_terms.join("、")}` : ""}
+                            {record.evidence_count ? ` · ${record.evidence_count} 条企业证据` : ""}
                           </Text>
                         </div>
                       )}
@@ -404,21 +498,12 @@ export default function PolicyManagementPage() {
                     <List
                       size="small"
                       dataSource={record.condition_results}
-                      renderItem={(condition) => (
-                        <List.Item>
+                      renderItem={(condition) => {
+                        const display = conditionDisplay(condition);
+                        return <List.Item>
                           <Space direction="vertical" size={2} style={{ width: "100%" }}>
                             <Space wrap>
-                              <Tag
-                                color={
-                                  condition.status === "SATISFIED"
-                                    ? "success"
-                                    : condition.status === "UNSATISFIED"
-                                      ? "error"
-                                      : "warning"
-                                }
-                              >
-                                {CONDITION_LABELS[condition.status]}
-                              </Tag>
+                              <Tag color={display.color}>{display.label}</Tag>
                               <Text strong>{condition.label || condition.field}</Text>
                               <Text type="secondary">
                                 要求：{condition.operator} {readableValue(condition.expected_value)}
@@ -432,8 +517,8 @@ export default function PolicyManagementPage() {
                               <Text type="secondary">政策依据：{condition.source_text}</Text>
                             )}
                           </Space>
-                        </List.Item>
-                      )}
+                        </List.Item>;
+                      }}
                     />
                   ) : (
                     <Text type="secondary">尚无可逐条核验的政策条件。</Text>

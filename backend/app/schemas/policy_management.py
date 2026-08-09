@@ -49,3 +49,9 @@ class ManagedPolicyRead(BaseModel):
     eligibility_conditions: list[dict[str, Any]]
     conditions_reviewed_at: datetime | None = None
     conditions_reviewed_by: str | None = None
+    eligibility_mode: Literal[
+        "ELIGIBILITY",
+        "REFERENCE_ONLY",
+        "UNCLASSIFIED",
+    ] = "UNCLASSIFIED"
+    eligibility_mode_reason: str | None = None

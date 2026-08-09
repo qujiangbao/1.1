@@ -35,6 +35,8 @@ export interface ManagedPolicy {
   eligibility_conditions: ManagedPolicyCondition[];
   conditions_reviewed_at?: string | null;
   conditions_reviewed_by?: string | null;
+  eligibility_mode: "ELIGIBILITY" | "REFERENCE_ONLY" | "UNCLASSIFIED";
+  eligibility_mode_reason?: string | null;
 }
 
 export type PolicyCandidateMatchType =
@@ -60,34 +62,47 @@ export interface PolicyCandidateConditionResult {
   mandatory: boolean;
   reason: string;
   source_text?: string | null;
+  rule_review_status?: "DRAFT" | "REVIEWED" | null;
+  preview_status?: "SATISFIED" | "UNSATISFIED" | "UNKNOWN" | null;
 }
 
 export interface PolicyCandidateEligibilityItem {
-  candidate_id: string;
+  candidate_id?: string | null;
   enterprise_id: string;
   enterprise_name: string;
-  candidate_status: string;
+  candidate_status?: string | null;
   match_type: PolicyCandidateMatchType;
+  preliminary_outcome: "MATCH" | "NO_MATCH" | "INSUFFICIENT";
+  decision_basis: "CONFIRMED" | "PRELIMINARY" | "INSUFFICIENT";
   reason: string;
   match_score?: number | null;
   matched_terms: string[];
   condition_results: PolicyCandidateConditionResult[];
   evaluated_at?: string | null;
+  data_source?: string | null;
+  evidence_count: number;
+  known_condition_count: number;
 }
 
 export interface PolicyCandidateEligibilityReport {
   policy_id: string;
   policy_title: string;
   data_mode: DataMode;
-  scope: "investment_candidate_pool";
-  scope_candidate_count: number;
-  relevant_candidate_count: number;
+  scope: "park_enterprise_catalog";
+  scope_enterprise_count: number;
+  evaluated_enterprise_count: number;
+  relevant_enterprise_count: number;
   eligible_count: number;
   potential_count: number;
+  preliminary_ineligible_count: number;
   ineligible_count: number;
+  insufficient_count: number;
   condition_count: number;
   reviewed_condition_count: number;
   conditions_origin?: string | null;
+  match_supported: boolean;
+  applicability_mode: ManagedPolicy["eligibility_mode"];
+  applicability_reason: string;
   items: PolicyCandidateEligibilityItem[];
 }
 

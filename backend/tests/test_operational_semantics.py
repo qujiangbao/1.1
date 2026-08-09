@@ -6,7 +6,11 @@ from app.agents.executor import _summary
 from app.langgraph.nodes.policy_nodes import policy_matcher_node
 from app.langgraph.nodes.service_nodes import get_service_graph
 from app.langgraph.nodes.supervisor_nodes import _keyword_intent_fallback
-from app.api.v1.policy_management import _candidate_eligibility_item
+from app.api.v1.policy_management import (
+    _candidate_eligibility_item,
+    _enterprise_eligibility_item,
+)
+from app.services.policy_applicability_service import classify_policy_applicability
 from app.schemas.enterprise import EnterpriseProfile
 from app.services.park_document_service import _query_terms
 
@@ -193,3 +197,67 @@ def test_draft_policy_condition_shows_actual_value_without_claiming_eligibility(
     assert item["match_type"] == "UNKNOWN"
     assert item["condition_results"][0]["status"] == "NEEDS_MANUAL_REVIEW"
     assert item["condition_results"][0]["actual_value"] == "广州黄埔"
+
+
+def test_full_catalog_preview_uses_imported_enterprise_evidence():
+    profile = EnterpriseProfile(
+        enterprise_id="ENT-IMPORTED-1",
+        name="园区导入机器人企业",
+        industry="机器人",
+        location="广州天河",
+        enterprise_status="存续",
+        data_source="local_json",
+        evidence=[{
+            "type": "source",
+            "value": "园区导入企业资料.docx",
+            "document_id": "doc-1",
+        }],
+    )
+    item = _enterprise_eligibility_item(
+        profile,
+        "policy-robot-1",
+        [{
+            "condition_code": "REGISTERED_REGION",
+            "label": "注册地要求",
+            "field": "region",
+            "operator": "CONTAINS",
+            "expected_value": ["广州"],
+            "mandatory": True,
+            "review_status": "DRAFT",
+            "source_text": "企业注册地应在广州",
+        }],
+    )
+
+    assert item["candidate_id"] is None
+    assert item["enterprise_name"] == "园区导入机器人企业"
+    assert item["match_type"] == "POTENTIALLY_ELIGIBLE"
+    assert item["decision_basis"] == "PRELIMINARY"
+    assert item["preliminary_outcome"] == "MATCH"
+    assert item["condition_results"][0]["preview_status"] == "SATISFIED"
+    assert item["evidence_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("title", "expected_mode"),
+    [
+        ("广州市机器人产业扶持资金申报通知", "ELIGIBILITY"),
+        ("关于征求机器人产业政策意见的公告", "REFERENCE_ONLY"),
+        ("机器人项目拟入选名单公示", "REFERENCE_ONLY"),
+        ("广州市机器人产业发展情况通报", "UNCLASSIFIED"),
+    ],
+)
+def test_policy_applicability_hides_non_application_documents(title, expected_mode):
+    mode, _reason = classify_policy_applicability(SimpleNamespace(
+        title=title,
+        status="active",
+    ))
+    assert mode == expected_mode
+
+
+def test_policy_applicability_uses_application_signals_from_body():
+    mode, _reason = classify_policy_applicability(SimpleNamespace(
+        title="广州市机器人产业发展工作方案",
+        content="三、支持对象和申报条件。申报单位应当依法登记并提交申请材料。",
+        status="active",
+    ))
+    assert mode == "ELIGIBILITY"
