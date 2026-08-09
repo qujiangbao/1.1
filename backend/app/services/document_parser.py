@@ -1,6 +1,6 @@
 """DocumentParser — PDF/DOCX/HTML 文本提取
 
-支持: .pdf (PyMuPDF), .docx (python-docx), .html (BeautifulSoup), .txt
+支持: .pdf (pypdf), .docx (python-docx), .pptx (python-pptx), .html, .txt
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ class ParsedDocument:
 class DocumentParser:
     """文档解析器"""
 
-    SUPPORTED = {".pdf", ".docx", ".html", ".htm", ".txt", ".md"}
+    SUPPORTED = {".pdf", ".docx", ".pptx", ".html", ".htm", ".txt", ".md"}
 
     async def parse(self, file_path: str) -> ParsedDocument:
         path = Path(file_path)
@@ -51,6 +51,8 @@ class DocumentParser:
                 text, pages = self._parse_pdf(str(path))
             elif ext == ".docx":
                 text, pages = self._parse_docx(str(path))
+            elif ext == ".pptx":
+                text, pages = self._parse_pptx(str(path))
             elif ext in (".html", ".htm"):
                 text, pages = self._parse_html(str(path))
             else:
@@ -71,19 +73,12 @@ class DocumentParser:
 
     def _parse_pdf(self, path: str) -> tuple[str, int]:
         try:
-            import fitz
-            doc = fitz.open(path)
-            text = "\n\n".join(page.get_text() for page in doc)
-            return text, len(doc)
+            from pypdf import PdfReader
+            doc = PdfReader(path)
+            text = "\n\n".join(page.extract_text() or "" for page in doc.pages)
+            return text, len(doc.pages)
         except ImportError:
-            logger.warning("PyMuPDF not installed, trying pdfplumber")
-            try:
-                import pdfplumber
-                with pdfplumber.open(path) as pdf:
-                    text = "\n\n".join(page.extract_text() or "" for page in pdf.pages)
-                    return text, len(pdf.pages)
-            except ImportError:
-                raise ImportError("需要安装 pymupdf 或 pdfplumber 来解析 PDF")
+            raise ImportError("需要安装 pypdf 来解析 PDF")
 
     def _parse_docx(self, path: str) -> tuple[str, int]:
         try:
@@ -93,6 +88,24 @@ class DocumentParser:
             return text, 1
         except ImportError:
             raise ImportError("需要安装 python-docx 来解析 DOCX")
+
+    def _parse_pptx(self, path: str) -> tuple[str, int]:
+        try:
+            from pptx import Presentation
+            presentation = Presentation(path)
+            slides: list[str] = []
+            for slide in presentation.slides:
+                parts: list[str] = []
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text:
+                        parts.append(shape.text)
+                    if getattr(shape, "has_table", False):
+                        for row in shape.table.rows:
+                            parts.append(" | ".join(cell.text for cell in row.cells))
+                slides.append("\n".join(parts))
+            return "\n\n".join(slides), len(presentation.slides)
+        except ImportError:
+            raise ImportError("需要安装 python-pptx 来解析 PPTX")
 
     def _parse_html(self, path: str) -> tuple[str, int]:
         try:

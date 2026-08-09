@@ -8,7 +8,7 @@ import {
   DashboardOutlined, ApiOutlined, CheckCircleOutlined,
   LoadingOutlined, ClockCircleOutlined,
 } from "@ant-design/icons";
-import { apiFetch } from "@/api/fetch";
+import { apiJson } from "@/api/fetch";
 
 // DAG node types
 interface DAGNode {
@@ -83,7 +83,7 @@ function buildChampionDAG(): { nodes: DAGNode[]; edges: DAGEdge[] } {
     },
     {
       id: "bi", label: "BIAgent", type: "agent",
-      agent: "AI数字驾驶舱", action: "Dashboard数据聚合",
+      agent: "AI经营分析师", action: "园区经营指标聚合",
       status: "completed", duration_ms: 800,
       x: 360, y: 500,
       output: "KPI数据就绪",
@@ -291,7 +291,7 @@ function SVGEdge({ edge, nodes }: { edge: DAGEdge; nodes: DAGNode[] }) {
         stroke={edge.parallel ? "#fa8c16" : "#1677ff"}
         strokeWidth={edge.parallel ? 2 : 2.5}
         strokeDasharray={edge.parallel ? "6,4" : "none"}
-        markerEnd="url(#arrowhead)"
+        markerEnd={`url(#${edge.parallel ? "arrowhead-parallel" : "arrowhead-default"})`}
         opacity={0.7}
       />
       {edge.parallel && (
@@ -375,11 +375,9 @@ export default function AgentTraceDAG({ taskId, live = false }: { taskId?: strin
   useEffect(() => {
     if (live || !taskId) return;
     setLoading(true);
-    apiFetch(`${process.env.NEXT_PUBLIC_API_URL || "/api/v1"}/agent/task/${taskId}/trace`)
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`Trace API ${response.status}`);
-        return response.json();
-      })
+    apiJson<unknown>(
+      `${process.env.NEXT_PUBLIC_API_URL || "/api/v1"}/agent/task/${taskId}/trace`,
+    )
       .then((trace) => setDag(buildLiveDAG(trace)))
       .catch((reason) => setError(reason instanceof Error ? reason.message : "执行链路加载失败"))
       .finally(() => setLoading(false));
@@ -402,34 +400,43 @@ export default function AgentTraceDAG({ taskId, live = false }: { taskId?: strin
 
       {!loading && <Card>
         <div style={{ overflow: "auto" }}>
-          <svg width={svgW} height={svgH} style={{ display: "block", margin: "0 auto" }}>
-            <defs>
-              <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-                <polygon points="0 0, 8 3, 0 6" fill="#1677ff" />
-              </marker>
-            </defs>
+          {/* SVG edges and HTML nodes must share the same coordinate origin. */}
+          <div style={{ position: "relative", width: svgW, height: svgH, margin: "0 auto" }}>
+            <svg
+              width={svgW}
+              height={svgH}
+              style={{ position: "absolute", inset: 0, display: "block" }}
+              aria-label="Agent 执行链路图"
+            >
+              <defs>
+                <marker id="arrowhead-default" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                  <polygon points="0 0, 8 3, 0 6" fill="#1677ff" />
+                </marker>
+                <marker id="arrowhead-parallel" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                  <polygon points="0 0, 8 3, 0 6" fill="#fa8c16" />
+                </marker>
+              </defs>
 
-            {/* Legend */}
-            <g transform="translate(10, 10)">
-              {Object.entries(TYPE_STYLE).filter(([k]) => k !== "tool").map(([key, style], i) => (
-                <g key={key} transform={`translate(${i * 120}, 0)`}>
-                  <rect width={14} height={14} rx={3} fill={style.color} opacity={0.3} />
-                  <rect x={1} y={1} width={12} height={12} rx={2} fill={style.color} />
-                  <text x={20} y={12} fontSize={11} fill="#666">
-                    {key === "user" ? "用户" : key === "supervisor" ? "调度" : key === "agent" ? "Agent" : "结果"}
-                  </text>
-                </g>
+              {/* Legend */}
+              <g transform="translate(10, 10)">
+                {Object.entries(TYPE_STYLE).filter(([k]) => k !== "tool").map(([key, style], i) => (
+                  <g key={key} transform={`translate(${i * 120}, 0)`}>
+                    <rect width={14} height={14} rx={3} fill={style.color} opacity={0.3} />
+                    <rect x={1} y={1} width={12} height={12} rx={2} fill={style.color} />
+                    <text x={20} y={12} fontSize={11} fill="#666">
+                      {key === "user" ? "用户" : key === "supervisor" ? "调度" : key === "agent" ? "Agent" : "结果"}
+                    </text>
+                  </g>
+                ))}
+              </g>
+
+              {/* Edges */}
+              {dag.edges.map((e) => (
+                <SVGEdge key={`${e.from}-${e.to}`} edge={e} nodes={dag.nodes} />
               ))}
-            </g>
+            </svg>
 
-            {/* Edges */}
-            {dag.edges.map((e) => (
-              <SVGEdge key={`${e.from}-${e.to}`} edge={e} nodes={dag.nodes} />
-            ))}
-          </svg>
-
-          {/* Nodes overlaid on SVG positions */}
-          <div style={{ position: "relative", height: svgH, marginTop: -svgH }}>
+            {/* Nodes share the SVG canvas coordinate system. */}
             {dag.nodes.map((node) => (
               <DAGNodeCard
                 key={node.id}

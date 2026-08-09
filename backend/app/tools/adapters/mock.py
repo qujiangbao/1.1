@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from app.schemas.enterprise import EnterpriseProfile, RiskEvent, BusinessStatus, EnterpriseSearchResult
@@ -98,7 +98,7 @@ class MockAdapter(DataAdapter):
             employee_count=200,
             patents_count=45,
             data_source="mock",
-            source_time=datetime.utcnow(),
+            source_time=datetime.now(timezone.utc),
             confidence_score=0.95,
             evidence=[self._make_evidence("preset", f"Mock 预设企业: {p['name']}")],
         )
@@ -129,14 +129,14 @@ class MockAdapter(DataAdapter):
                 match_reason=e["match_reason"],
                 score=e.get("score", 85),
                 data_source="mock",
-                source_time=datetime.utcnow(),
+                source_time=datetime.now(timezone.utc),
                 confidence_score=0.90,
                 evidence=[self._make_evidence("mock_search", f"query={query}")],
             ))
 
         return EnterpriseSearchResult(
             query=query, total=len(profiles), enterprises=profiles,
-            data_source="mock", source_time=datetime.utcnow(), confidence_score=0.90,
+            data_source="mock", source_time=datetime.now(timezone.utc), confidence_score=0.90,
         )
 
     # ── Risk Events ────────────────────────
@@ -145,7 +145,7 @@ class MockAdapter(DataAdapter):
         self, enterprise_id: str, event_type: str = None, limit: int = 20
     ) -> List[RiskEvent]:
         eid = str(enterprise_id)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # 预设风险事件
         all_events = [
@@ -200,7 +200,7 @@ class MockAdapter(DataAdapter):
             abnormal_records=[],
             annual_report_last_year="2025",
             data_source="mock",
-            source_time=datetime.utcnow(),
+            source_time=datetime.now(timezone.utc),
             confidence_score=1.0,
             evidence=[self._make_evidence("mock_status", "基于预设数据")],
         )

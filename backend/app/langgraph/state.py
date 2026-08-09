@@ -45,6 +45,9 @@ class SupervisorState(TypedDict):
     # Messages
     messages: Annotated[List[Dict], add_messages]
     user_query: str
+    data_mode: str
+    current_date: str
+    data_context: Dict[str, Any]
 
     # Intent
     intent: Optional[str]

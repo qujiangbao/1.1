@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 
 from app.config import get_settings
@@ -16,20 +17,48 @@ async def lifespan(app: FastAPI):
     logger.info("Industrial Park Agent starting...")
     from app.agents.registry import init_agent_registry
     await init_agent_registry()
+    from app.tools.knowledge_tool import get_knowledge_tool
+    knowledge_tool = get_knowledge_tool()
+    knowledge_tool.bind_event_loop(asyncio.get_running_loop())
 
-    if settings.database_enabled:
-        from app.database.session import init_db
-        await init_db(settings.database_url)
+    database_started = False
+    try:
+        if settings.database_enabled:
+            from app.database.session import init_db
+            await init_db(settings.database_url)
+            database_started = True
 
-    # LLM Warmup — 后台预热，不阻塞启动
-    if settings.llm_warmup_enabled and (settings.openai_api_key or settings.deepseek_api_key):
-        from app.core.llm_warmup import start_warmup
-        start_warmup()
-    yield
-    if settings.database_enabled:
-        from app.database.session import close_db
-        await close_db()
-    logger.info("Industrial Park Agent shutting down...")
+            # Initialize the persistent checkpointer during startup so a
+            # production connection/configuration failure cannot be deferred
+            # until the first user request.
+            from app.langgraph.graph import get_supervisor_graph
+            await get_supervisor_graph()
+
+        if (
+            settings.llm_validate_models_on_startup
+            and (settings.openai_api_key or settings.deepseek_api_key)
+        ):
+            from app.core.llm_gateway import get_llm_gateway
+            try:
+                await get_llm_gateway().validate_configured_models()
+            except Exception:
+                logger.exception("Configured LLM model validation failed")
+                if settings.app_env.lower() == "production":
+                    raise
+
+        # LLM Warmup — 后台预热，不阻塞启动
+        if settings.llm_warmup_enabled and (settings.openai_api_key or settings.deepseek_api_key):
+            from app.core.llm_warmup import start_warmup
+            start_warmup()
+        yield
+    finally:
+        knowledge_tool.unbind_event_loop()
+        from app.langgraph.graph import close_supervisor_graph
+        await close_supervisor_graph()
+        if database_started:
+            from app.database.session import close_db
+            await close_db()
+        logger.info("Industrial Park Agent shutting down...")
 
 
 settings = get_settings()

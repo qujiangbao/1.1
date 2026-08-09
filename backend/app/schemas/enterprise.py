@@ -24,8 +24,11 @@ class EnterpriseProfile(BaseModel):
     credit_code: Optional[str] = Field(None, description="统一社会信用代码")
     legal_representative: Optional[str] = Field(None, description="法定代表人")
     registered_capital: Optional[str] = Field(None, description="注册资本")
+    capital_amount: Optional[float] = Field(None, description="注册资本数值，用于筛选和排序")
+    capital_currency: Optional[str] = Field(None, description="注册资本币种")
     established_date: Optional[str] = Field(None, description="成立日期")
     company_type: Optional[str] = Field(None, description="企业类型")
+    enterprise_status: Optional[str] = Field(None, description="企业登记状态")
 
     # ── 经营信息 ──
     industry: Optional[str] = Field(None, description="所属行业")
@@ -48,6 +51,11 @@ class EnterpriseProfile(BaseModel):
     match_reason: Optional[str] = Field(None, description="匹配理由")
     financial_health: Optional[str] = Field(None, description="财务健康度")
     expansion_willingness: Optional[str] = Field(None, description="扩产意愿")
+    tags: List[str] = Field(default_factory=list, description="企业标签")
+    data_quality: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="字段覆盖和缺失说明；unknown 不等同于 0",
+    )
 
     # ── 元数据 ──
     data_source: str = Field(default="mock", description="数据来源: mock|tianyancha|qichacha|government")

@@ -8,6 +8,7 @@ from app.tools.adapters.mock import MockAdapter
 from app.tools.adapters.tianyancha import TianyanchaAdapter
 from app.tools.adapters.qichacha import QichachaAdapter
 from app.tools.adapters.government import GovernmentAdapter
+from app.tools.adapters.local_json import LocalJsonAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,13 @@ def create_adapter(settings=None) -> DataAdapter:
         settings = get_settings()
 
     source = settings.enterprise_data_source
+
+    if source == "local_json":
+        logger.info("Enterprise Data Adapter: local JSON")
+        return LocalJsonAdapter(
+            settings.enterprise_local_json_path,
+            include_park_documents=True,
+        )
 
     if source == "tianyancha":
         if settings.tianyancha_api_key:

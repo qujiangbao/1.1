@@ -37,7 +37,7 @@ class ToolGateway:
                        "policy_query", "policy_hybrid_search",
                        "enterprise_profile_get"],
         "IndustryAgent": ["industry_query", "industry_vector_search",
-                         "knowledge_graph_query"],
+                         "knowledge_graph_query", "enterprise_search"],
         "EnterpriseServiceAgent": ["enterprise_query", "enterprise_profile_get",
                                    "service_ticket_query"],
         "BIAgent": ["dashboard_query", "metric_query"],
@@ -311,8 +311,9 @@ class ToolGateway:
 
             return ToolResult(
                 tool_name=tool_name,
-                status="success",
+                status=result.get("status", "success"),
                 data=result.get("result"),
+                error=result.get("error", ""),
                 duration_ms=duration,
             )
         except Exception as e:

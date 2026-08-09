@@ -62,21 +62,28 @@ def data_request_node(state: RiskState) -> RiskState:
     return state
 
 
-def _calc_feature(value: float, thresholds: tuple, scores: tuple) -> float:
+def _calc_feature(value: float | None, thresholds: tuple, scores: tuple) -> float | None:
+    if value is None:
+        return None
     for t, s in zip(thresholds, scores):
         if value >= t: return s
     return scores[-1]
 
 
 def feature_extractor_node(state: RiskState) -> RiskState:
-    p = state.get("profile_data", {})
+    events = state.get("risk_events", []) or []
+    level_score = {"HIGH": 90.0, "MEDIUM": 60.0, "LOW": 30.0}
+    event_scores = [
+        level_score.get(str(item.get("event_level") or "").upper())
+        for item in events
+    ]
+    event_scores = [value for value in event_scores if value is not None]
+    business_status = str(state.get("business_status", {}).get("status") or "").lower()
     features = {
-        "business_risk": _calc_feature(p.get("growth_rate", 10), (20, 10, 0), (10, 30, 60)),
-        "finance_risk": _calc_feature(p.get("funding_amount", 500), (500, 100, 0), (10, 30, 60)),
-        "public_opinion_risk": 20,
-        "legal_risk": 15,
-        "talent_risk": _calc_feature(p.get("employee_count", 100), (200, 50, 0), (10, 30, 60)),
-        "market_risk": 25,
+        "verified_event_risk": max(event_scores) if event_scores else None,
+        "registration_risk": (
+            90.0 if business_status in {"abnormal", "revoked", "cancelled"} else None
+        ),
     }
     state["risk_features"] = features
     state["status"] = "scoring"
@@ -85,9 +92,13 @@ def feature_extractor_node(state: RiskState) -> RiskState:
 
 def scoring_node(state: RiskState) -> RiskState:
     f = state["risk_features"]
-    weights = {"business_risk": 0.30, "finance_risk": 0.25, "public_opinion_risk": 0.15,
-               "legal_risk": 0.15, "talent_risk": 0.10, "market_risk": 0.05}
-    score = round(sum(f[k] * weights[k] for k in weights), 1)
+    available = {key: value for key, value in f.items() if value is not None}
+    if not available:
+        state["risk_score"] = None
+        state["risk_level"] = "UNKNOWN"
+        state["status"] = "explaining"
+        return state
+    score = round(max(available.values()), 1)
     state["risk_score"] = score
     state["risk_level"] = "LOW" if score <= 30 else ("MEDIUM" if score <= 70 else "HIGH")
     state["status"] = "explaining"
@@ -96,40 +107,54 @@ def scoring_node(state: RiskState) -> RiskState:
 
 def explanation_node(state: RiskState) -> RiskState:
     f = state["risk_features"]
-    factors = [{"type": k, "score": v} for k, v in sorted(f.items(), key=lambda x: -x[1]) if v > 30]
+    available = [(key, value) for key, value in f.items() if value is not None]
+    factors = [
+        {"type": key, "score": value}
+        for key, value in sorted(available, key=lambda item: -item[1])
+        if value > 30
+    ]
     state["explanation"] = {"risk_factors": factors}
     state["recommendation"] = (
         "建议园区立即走访" if state["risk_level"] == "HIGH"
         else "建议月度跟踪" if state["risk_level"] == "MEDIUM"
-        else "正常关注"
+        else "正常关注" if state["risk_level"] == "LOW"
+        else "数据不足，暂不判定风险等级"
     )
     state["status"] = "predicting"
     return state
 
 
 def predict_node(state: RiskState) -> RiskState:
-    """90 天风险预测"""
+    """Do not manufacture a forecast without a verified time series."""
     score = state["risk_score"]
-    history = tg.invoke("RiskAgent", "risk_history", {"enterprise_id": state["enterprise_id"]})
-    trend = 0.05 if state["risk_level"] == "MEDIUM" else (0.1 if state["risk_level"] == "HIGH" else -0.02)
     state["prediction"] = {
         "current": score,
-        "predicted_30d": min(100, score + trend * 1 * 30),
-        "predicted_90d": min(100, score + trend * 3 * 30),
-        "direction": "worsening" if trend > 0 else "improving",
+        "predicted_30d": None,
+        "predicted_90d": None,
+        "direction": "unknown",
+        "reason": "未接入连续风险事件时间序列，不生成预测值",
     }
     state["status"] = "reporting"
     return state
 
 
 def report_generator_node(state: RiskState) -> RiskState:
+    events = state.get("risk_events", []) or []
+    reason = (
+        f"核验到 {len(events)} 条风险事件，按最高事件等级给出当前风险提示"
+        if events else "未取得可核验风险事件，不能据此认定低风险"
+    )
     state["report"] = {
         "enterprise_id": state["enterprise_id"],
         "enterprise_name": state.get("basic_info", {}).get("name", ""),
         "risk_score": state["risk_score"],
         "risk_level": state["risk_level"],
+        "risk_reason": reason,
         "risk_factors": state.get("explanation", {}).get("risk_factors", []),
         "recommendation": state["recommendation"],
+        "action": state["recommendation"],
+        "risk_events": events,
+        "business_status": state.get("business_status", {}),
         "prediction": state["prediction"],
     }
     state["status"] = "done"

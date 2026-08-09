@@ -6,7 +6,7 @@ from app.schemas.agent import AgentCapability
 AGENT_REGISTRY: Dict[str, dict] = {
     "InvestmentAgent": {
         "name": "InvestmentAgent",
-        "display": "AI招商智能体",
+        "display": "AI招商经理",
         "capabilities": [
             "enterprise_search", "enterprise_profile",
             "enterprise_scoring", "investment_recommend",
@@ -47,17 +47,17 @@ AGENT_REGISTRY: Dict[str, dict] = {
     },
     "EnterpriseServiceAgent": {
         "name": "EnterpriseServiceAgent",
-        "display": "AI企业管家",
+        "display": "AI企业服务助手",
         "capabilities": [
-            "service_intent_analysis", "service_classification",
-            "ticket_management", "service_workflow"
+            "service_request_classification", "service_guidance",
+            "manual_handoff_advice"
         ],
         "timeout_ms": 30000,
         "retry_count": 2,
     },
     "BIAgent": {
         "name": "BIAgent",
-        "display": "AI数字驾驶舱",
+        "display": "AI经营分析师",
         "capabilities": [
             "kpi_query", "dashboard_data",
             "chart_generation", "ai_insight"

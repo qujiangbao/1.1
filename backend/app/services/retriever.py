@@ -16,16 +16,34 @@ class PolicyRetriever:
     def __init__(self):
         from app.config import get_settings
         settings = get_settings()
-        self.mode = settings.policy_rag_mode  # "mock" | "pgvector"
+        self.mode = settings.policy_rag_mode  # "mock" | "crawl4ai" | "pgvector"
         self.embedding_provider = settings.policy_embedding_provider
         self.embedding_model = settings.policy_embedding_model
         self.embedding_dimensions = settings.policy_embedding_dimensions
+        self.allow_mock_fallback = settings.app_env.lower() != "production"
+        self._crawl4ai_data = None
 
     async def hybrid_search(
         self, query: str, top_k: int = 10, filters: Optional[dict] = None
     ) -> dict:
         """混合检索 — 主入口"""
-        # Mock 模式
+        # Crawl4AI government policy cache
+        if self.mode == "crawl4ai":
+            try:
+                from app.tools.adapters.policy_crawl4ai import PolicyCrawl4AIData
+                if self._crawl4ai_data is None:
+                    self._crawl4ai_data = PolicyCrawl4AIData()
+                chunks = self._crawl4ai_data.search(query=query, filters=filters, top_k=top_k)
+                return {"chunks": chunks, "total": len(chunks), "mode": "crawl4ai"}
+            except Exception as e:
+                logger.exception("Crawl4AI policy search failed")
+                if not self.allow_mock_fallback:
+                    raise
+                fallback = self._mock_search(query, filters, top_k)
+                fallback["mode"] = "mock_fallback"
+                return fallback
+
+        # Mock mode
         if self.mode == "mock":
             return self._mock_search(query, filters, top_k)
 
@@ -33,8 +51,12 @@ class PolicyRetriever:
         try:
             return await self._pgvector_hybrid_search(query, top_k, filters)
         except Exception as e:
-            logger.warning(f"pgvector search failed: {e}, falling back to mock")
-            return self._mock_search(query, filters, top_k)
+            logger.exception("pgvector search failed")
+            if not self.allow_mock_fallback:
+                raise
+            fallback = self._mock_search(query, filters, top_k)
+            fallback["mode"] = "mock_fallback"
+            return fallback
 
     # ── pgvector 实现 ──────────────────────
 
@@ -55,14 +77,14 @@ class PolicyRetriever:
         # 2. pgvector cosine similarity
         from app.database.session import SessionLocal
         if SessionLocal is None:
-            return self._mock_search(query, filters, top_k)
+            raise RuntimeError("Database is not initialized for pgvector retrieval")
 
         from sqlalchemy import text
         async with SessionLocal() as session:
             # 构建 WHERE 条件
             conditions = []
             params = {
-                "query_vec": str(query_embedding),
+                "query_vec": "[" + ",".join(str(value) for value in query_embedding) + "]",
                 "top_k": top_k * 2,  # 多取一些供 RRF
             }
 
@@ -81,13 +103,13 @@ class PolicyRetriever:
             sql = f"""
                 SELECT 
                     pc.chunk_id, pc.policy_id, pc.chunk_index, pc.content,
-                    1 - (pc.embedding <=> :query_vec) AS score,
+                    1 - (pc.embedding <=> CAST(:query_vec AS vector)) AS score,
                     pc.metadata,
                     'vector' AS search_method
                 FROM policy_chunks pc
                 JOIN policy p ON pc.policy_id = p.policy_id
-                WHERE {where_clause}
-                ORDER BY pc.embedding <=> :query_vec
+                WHERE pc.embedding IS NOT NULL AND {where_clause}
+                ORDER BY pc.embedding <=> CAST(:query_vec AS vector)
                 LIMIT :top_k
             """
 
@@ -122,7 +144,7 @@ class PolicyRetriever:
                 "evidence": [{
                     "type": "pgvector",
                     "value": f"cosine_similarity={row.score:.4f}",
-                    "url": "",
+                    "url": chunk_meta.get("source_url", ""),
                 }],
             })
 

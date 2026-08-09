@@ -1,4 +1,5 @@
 """Supervisor LangGraph — 核心编排图 (P2: AsyncPostgresSaver)"""
+import asyncio
 import logging
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -124,42 +125,130 @@ def _build_workflow() -> StateGraph:
 # === 全局单例 (P2: 懒初始化 + AsyncPostgresSaver) ===
 _supervisor_graph = None
 _checkpointer = None
+_checkpointer_context = None
 _setup_done = False
+_graph_init_lock = None
+
+
+def _postgres_checkpoint_url(database_url: str) -> str:
+    """Convert a SQLAlchemy asyncpg URL into a psycopg connection URL."""
+    prefix = "postgresql+asyncpg://"
+    if database_url.startswith(prefix):
+        return f"postgresql://{database_url[len(prefix):]}"
+    return database_url
 
 
 async def get_supervisor_graph() -> StateGraph:
     """获取编译后的 Supervisor graph（异步初始化 checkpointer）
 
-    DATABASE_ENABLED=true  → AsyncPostgresSaver (PostgreSQL)
-    DATABASE_ENABLED=false → MemorySaver (v1.1 行为, 100% 兼容)
-    PG 连接失败             → 降级 MemorySaver + ERROR log
+    由 SUPERVISOR_CHECKPOINTER 控制状态存储后端（与业务数据库 DATABASE_ENABLED 解耦）：
+      postgres → AsyncPostgresSaver (PostgreSQL, 默认, 2GB 下较重)
+      sqlite   → AsyncSqliteSaver  (落盘, 轻量 + 抗重启, 推荐用于 2GB)
+      memory   → MemorySaver       (纯内存, 最轻, 重启即清空)
+    PG/SQLite 初始化失败时：生产环境 postgres 失败终止启动，其余降级 MemorySaver。
     """
-    global _supervisor_graph, _checkpointer, _setup_done
+    global _supervisor_graph, _checkpointer, _checkpointer_context
+    global _setup_done, _graph_init_lock
 
     if _supervisor_graph is not None:
         return _supervisor_graph
 
-    from app.config import get_settings
-    settings = get_settings()
+    if _graph_init_lock is None:
+        _graph_init_lock = asyncio.Lock()
 
-    if settings.database_enabled:
-        try:
-            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-            _checkpointer = AsyncPostgresSaver.from_conn_string(settings.database_url)
-            if not _setup_done:
-                await _checkpointer.setup()
-                _setup_done = True
-            logger.info("Checkpointer: AsyncPostgresSaver connected to PostgreSQL")
-        except Exception as e:
-            logger.error(
-                "Failed to init Postgres checkpointer: %s, "
-                "falling back to MemorySaver", e
-            )
+    async with _graph_init_lock:
+        if _supervisor_graph is not None:
+            return _supervisor_graph
+
+        from app.config import get_settings
+        settings = get_settings()
+
+        mode = (settings.supervisor_checkpointer or "postgres").strip().lower()
+        context = None
+        context_entered = False
+
+        if mode == "postgres" and settings.database_enabled:
+            try:
+                from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+                context = AsyncPostgresSaver.from_conn_string(
+                    _postgres_checkpoint_url(settings.database_url)
+                )
+                _checkpointer = await context.__aenter__()
+                context_entered = True
+                if not _setup_done:
+                    await _checkpointer.setup()
+                    _setup_done = True
+                _checkpointer_context = context
+                logger.info("Checkpointer: AsyncPostgresSaver connected to PostgreSQL")
+            except Exception as exc:
+                if context is not None and context_entered:
+                    await context.__aexit__(type(exc), exc, exc.__traceback__)
+                _checkpointer = None
+                if settings.app_env.lower() == "production":
+                    raise RuntimeError("PostgreSQL checkpointer initialization failed") from exc
+                logger.exception(
+                    "Failed to initialize PostgreSQL checkpointer; "
+                    "using in-memory development fallback"
+                )
+                _checkpointer = MemorySaver()
+        elif mode == "sqlite":
+            try:
+                import os
+                from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+                db_path = os.environ.get(
+                    "SUPERVISOR_CHECKPOINT_DB",
+                    "/app/data/checkpoints/supervisor.db",
+                )
+                os.makedirs(os.path.dirname(db_path), exist_ok=True)
+                context = AsyncSqliteSaver.from_conn_string(db_path)
+                _checkpointer = await context.__aenter__()
+                context_entered = True
+                if not _setup_done:
+                    await _checkpointer.setup()
+                    _setup_done = True
+                _checkpointer_context = context
+                logger.info("Checkpointer: AsyncSqliteSaver at %s", db_path)
+            except Exception as exc:
+                if context is not None and context_entered:
+                    await context.__aexit__(type(exc), exc, exc.__traceback__)
+                _checkpointer = None
+                logger.exception(
+                    "Failed to initialize SQLite checkpointer; "
+                    "falling back to in-memory"
+                )
+                _checkpointer = MemorySaver()
+        else:
+            # memory mode, or postgres requested without database_enabled
             _checkpointer = MemorySaver()
-    else:
-        _checkpointer = MemorySaver()
-        logger.info("Checkpointer: MemorySaver (in-memory, DATABASE_ENABLED=false)")
+            logger.info(
+                "Checkpointer: MemorySaver (in-memory; mode=%s, database_enabled=%s)",
+                mode, settings.database_enabled,
+            )
 
-    workflow = _build_workflow()
-    _supervisor_graph = workflow.compile(checkpointer=_checkpointer)
-    return _supervisor_graph
+        try:
+            workflow = _build_workflow()
+            _supervisor_graph = workflow.compile(checkpointer=_checkpointer)
+        except Exception as exc:
+            if _checkpointer_context is not None:
+                await _checkpointer_context.__aexit__(type(exc), exc, exc.__traceback__)
+                _checkpointer_context = None
+            _checkpointer = None
+            raise
+
+        return _supervisor_graph
+
+
+async def close_supervisor_graph():
+    """Release the PostgreSQL checkpointer and reset graph singletons."""
+    global _supervisor_graph, _checkpointer, _checkpointer_context
+    global _setup_done, _graph_init_lock
+
+    try:
+        if _checkpointer_context is not None:
+            await _checkpointer_context.__aexit__(None, None, None)
+    finally:
+        _supervisor_graph = None
+        _checkpointer = None
+        _checkpointer_context = None
+        _setup_done = False
+        _graph_init_lock = None

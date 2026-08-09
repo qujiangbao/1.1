@@ -1,5 +1,5 @@
 """Business API — 企业数据 + 政策 RAG (P0+P1)"""
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import Optional
 from app.tools.enterprise_data import get_enterprise_data_tool
@@ -59,6 +59,13 @@ async def search_enterprises(
     query: str = Query(..., description="搜索关键词"),
     industry: str = Query(None, description="行业筛选"),
     location: str = Query(None, description="地区筛选"),
+    min_capital: float = Query(None, ge=0, description="最低注册资本"),
+    max_capital: float = Query(None, ge=0, description="最高注册资本"),
+    sort_by: str = Query(
+        "relevance",
+        pattern="^(relevance|capital_desc|capital_asc)$",
+        description="排序：相关度、注册资本降序或升序",
+    ),
     limit: int = Query(20, ge=1, le=100),
 ):
     """搜索企业
@@ -66,7 +73,15 @@ async def search_enterprises(
     Returns: 匹配的企业列表，每项包含 EnterpriseProfile 字段
     """
     etd = get_enterprise_data_tool()
-    result = await etd.search_enterprises(query, industry, location, limit)
+    result = await etd.search_enterprises(
+        query,
+        industry,
+        location,
+        limit,
+        min_capital=min_capital,
+        max_capital=max_capital,
+        sort_by=sort_by,
+    )
     return {"success": True, "data": {
         "query": result.query,
         "total": result.total,
@@ -86,6 +101,7 @@ async def get_data_source_info():
         "data": {
             "source_name": etd.source_name,
             "healthy": healthy,
+            "stats": etd.stats(),
         }
     }
 
@@ -109,11 +125,13 @@ async def policy_search(body: PolicySearchRequest):
     """政策智能检索"""
     from app.tools.knowledge_tool import get_knowledge_tool
     kt = get_knowledge_tool()
-    result = kt.policy_hybrid_search_sync({
+    result = await kt.policy_hybrid_search({
         "query": body.query,
         "top_k": body.top_k,
         "filters": body.filters,
     })
+    if result.get("status") != "success":
+        raise HTTPException(status_code=503, detail=result.get("error", "Policy search unavailable"))
     return {"success": True, "data": result.get("result", result)}
 
 
@@ -127,7 +145,12 @@ async def policy_match(body: PolicyMatchRequest):
     profile = await etd.get_profile(body.enterprise_id)
 
     # 2. 构建搜索查询
-    query = f"{profile.industry or ''} {profile.location or ''}"
+    query = " ".join(filter(None, (
+        profile.industry,
+        profile.location,
+        " ".join(profile.tags),
+        (profile.business_scope or "")[:300],
+    )))
     filters = {}
     if profile.industry:
         filters["industry"] = profile.industry
@@ -136,9 +159,11 @@ async def policy_match(body: PolicyMatchRequest):
 
     # 3. 混合检索
     kt = get_knowledge_tool()
-    result = kt.policy_hybrid_search_sync({
+    result = await kt.policy_hybrid_search({
         "query": query, "top_k": body.top_k, "filters": filters,
     })
+    if result.get("status") != "success":
+        raise HTTPException(status_code=503, detail=result.get("error", "Policy search unavailable"))
 
     chunks = result.get("result", {}).get("chunks", [])
     return {
@@ -163,10 +188,22 @@ async def get_policy_rag_status():
 
     total_docs = 0
     total_chunks = 0
+    last_updated = None
+    healthy = True
     if mode == "pgvector":
         from app.services.vector_store import VectorStore
         vs = VectorStore()
         total_chunks = await vs.count_chunks()
+        healthy = total_chunks > 0
+    elif mode == "crawl4ai":
+        try:
+            from app.tools.adapters.policy_crawl4ai import PolicyCrawl4AIData
+            stats = PolicyCrawl4AIData().stats()
+            total_docs = stats["total_documents"]
+            last_updated = stats["last_updated"]
+            healthy = stats["healthy"]
+        except Exception:
+            healthy = False
 
     return {
         "success": True,
@@ -174,9 +211,10 @@ async def get_policy_rag_status():
             "mode": mode,
             "total_documents": total_docs,
             "total_chunks": total_chunks,
+            "last_updated": last_updated,
             "embedding_model": s.policy_embedding_model,
             "embedding_dimensions": s.policy_embedding_dimensions,
-            "healthy": True,
+            "healthy": healthy,
         }
     }
 
@@ -186,17 +224,70 @@ async def get_policy_rag_status():
 @router.post("/investment/search")
 async def investment_search(body: dict):
     """P8: 兼容 POST /investment/search → 委托 EnterpriseDataTool"""
+    if str(body.get("data_mode", "real")).lower() == "demo":
+        from app.services.demo_scenario import (
+            DEMO_DISCLAIMER,
+            DEMO_INVESTMENT_TARGETS,
+        )
+
+        query = str(body.get("query", "")).strip().lower()
+        candidates = [
+            {
+                **item,
+                "location": "演示园区",
+                "enterprise_status": "演示状态",
+                "registered_capital": "演示字段",
+                "credit_code": None,
+                "patents_count": None,
+                "tags": ["演示沙盘", item["industry"]],
+                "match_reason": item["evidence"],
+                "data_quality": {"credit_code": "synthetic"},
+            }
+            for item in DEMO_INVESTMENT_TARGETS
+            if not query
+            or query in item["name"].lower()
+            or query in item["industry"].lower()
+            or query in "机器人产业"
+        ]
+        return {
+            "success": True,
+            "data": {
+                "enterprises": candidates,
+                "total": len(candidates),
+                "returned": len(candidates),
+                "catalog_total": 36,
+                "data_quality": {},
+                "limitations": [DEMO_DISCLAIMER],
+                "data_source": "demo_scenario",
+                "is_demo": True,
+                "disclaimer": DEMO_DISCLAIMER,
+            },
+        }
+
     from app.tools.enterprise_data import get_enterprise_data_tool
     etd = get_enterprise_data_tool()
     query = body.get("industry", body.get("query", ""))
-    result = etd.search_enterprises_sync(query, limit=body.get("limit", 20))
-    enterprises = result.get("enterprises", [])
+    result = await etd.search_enterprises(
+        query,
+        industry=body.get("industry_filter"),
+        location=body.get("location"),
+        limit=body.get("limit", 20),
+        min_capital=body.get("min_capital"),
+        max_capital=body.get("max_capital"),
+        sort_by=body.get("sort_by", "relevance"),
+    )
+    enterprises = [enterprise.model_dump() for enterprise in result.enterprises]
+    stats = etd.stats()
     return {
         "success": True,
         "data": {
             "enterprises": enterprises,
-            "total": len(enterprises),
-            "data_source": "mock",
+            "total": result.total,
+            "returned": len(enterprises),
+            "catalog_total": stats.get("total_enterprises"),
+            "data_quality": stats.get("coverage", {}),
+            "limitations": stats.get("limitations", []),
+            "data_source": result.data_source,
         }
     }
 

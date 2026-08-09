@@ -1,185 +1,285 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import type { KeyboardEvent } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Card, Row, Col, Statistic, Table, Tag, Alert, Timeline, Button } from "antd";
+import { Alert, Button, Empty, Progress, Tag } from "antd";
 import {
-  ArrowUpOutlined, ArrowDownOutlined, BulbOutlined, WarningOutlined,
-  CheckCircleOutlined, ClockCircleOutlined, ThunderboltOutlined,
+  AlertOutlined,
+  ArrowRightOutlined,
+  BarChartOutlined,
+  CheckCircleOutlined,
+  DatabaseOutlined,
+  FileSearchOutlined,
+  RobotOutlined,
+  SearchOutlined,
+  SyncOutlined,
+  TeamOutlined,
+  ThunderboltOutlined,
 } from "@ant-design/icons";
-import { apiFetch } from "@/api/fetch";
+import { apiJson } from "@/api/fetch";
+import { useDataMode } from "@/contexts/DataModeContext";
+import PageHeader from "@/components/layout/PageHeader";
+
 const API = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
 export default function DashboardPage() {
   const router = useRouter();
+  const { mode, isDemo } = useDataMode();
   const [data, setData] = useState<Record<string, any>>({});
   const [report, setReport] = useState<any>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
 
-  const openPage = (path: string) => router.push(path);
-  const openPageWithKeyboard = (event: KeyboardEvent, path: string) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      openPage(path);
+  const loadDashboard = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [overview, dailyReport] = await Promise.all([
+        apiJson<{ success: boolean; data: Record<string, any> }>(`${API}/dashboard/overview?mode=${mode}`),
+        apiJson<{ success: boolean; data: any }>(`${API}/agent/daily-report?mode=${mode}`),
+      ]);
+      setData(overview.data || {});
+      setReport(dailyReport.data);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "园区数据加载失败");
+    } finally {
+      setLoading(false);
     }
-  };
+  }, [mode]);
 
-  useEffect(() => {
-    apiFetch(`${API}/dashboard/overview`).then((r) => r.json()).then((d) => setData(d.data || {}));
-    apiFetch(`${API}/agent/daily-report`).then((r) => r.json()).then((d) => setReport(d.data));
-  }, []);
+  useEffect(() => { void loadDashboard(); }, [loadDashboard]);
+
+  const enterpriseCount = report?.park_metrics?.total_enterprises ?? data?.park_overview?.total_enterprises ?? 0;
+  const policyCount = report?.policy_total ?? data?.policy?.total ?? 0;
+  const riskCount = isDemo
+    ? (report?.risk_alerts?.length ?? data?.risk?.high_risk ?? 0)
+    : (report?.risk_alerts?.length || data?.risk?.high_risk || 0);
+  const agentCalls = report?.ai_tasks_completed ?? data?.ai_operations?.agent_calls ?? 0;
+  const dataLabel = isDemo ? "演示沙盘" : "公开快照";
+
+  const metrics = [
+    {
+      label: isDemo ? "示例企业场景" : "企业公开快照",
+      value: enterpriseCount,
+      unit: "家",
+      foot: "进入企业与招商决策",
+      path: "/dashboard/investment",
+      icon: <TeamOutlined />,
+      color: "#2f6f64",
+      soft: "#e7f0ed",
+    },
+    {
+      label: "可检索政策正文",
+      value: policyCount,
+      unit: "条",
+      foot: "查看申报条件与依据",
+      path: "/management/policies",
+      icon: <DatabaseOutlined />,
+      color: "#58645f",
+      soft: "#ecefeb",
+    },
+    {
+      label: isDemo ? "风险演示事件" : "需关注风险",
+      value: riskCount || (isDemo ? 0 : "待评估"),
+      unit: riskCount ? "条" : "",
+      foot: isDemo ? "查看风险发现闭环" : "进入风险证据核验",
+      path: "/dashboard/risk",
+      icon: <AlertOutlined />,
+      color: "#c58a42",
+      soft: "#f8efe3",
+    },
+    {
+      label: "今日 AI 任务",
+      value: agentCalls,
+      unit: "次",
+      foot: "查看智能体协作状态",
+      path: "/agent/team",
+      icon: <RobotOutlined />,
+      color: "#4f8f7a",
+      soft: "#e8f2ee",
+    },
+  ];
+
+  const quickActions = [
+    {
+      title: "启动园区研判",
+      description: "用一句需求调度产业、招商、风险与政策 Agent",
+      value: "进入工作台",
+      path: "/agent/workspace",
+      icon: <ThunderboltOutlined />,
+      color: "#2f6f64",
+      soft: "#e7f0ed",
+    },
+    {
+      title: "生成招商目标清单",
+      description: "围绕产业链缺口筛选企业并查看评分依据",
+      value: "招商决策",
+      path: "/dashboard/investment",
+      icon: <SearchOutlined />,
+      color: "#4f8f7a",
+      soft: "#e8f2ee",
+    },
+    {
+      title: "核验企业风险",
+      description: "查看风险等级、原因、证据与建议处置动作",
+      value: riskCount ? `${riskCount} 条关注` : "开始核验",
+      path: "/dashboard/risk",
+      icon: <AlertOutlined />,
+      color: "#c58a42",
+      soft: "#f8efe3",
+    },
+    {
+      title: "检索惠企政策",
+      description: "从公开政策快照中匹配申报条件与支持方向",
+      value: `${policyCount} 条政策`,
+      path: "/management/policies",
+      icon: <FileSearchOutlined />,
+      color: "#58645f",
+      soft: "#ecefeb",
+    },
+  ];
 
   return (
-    <>
-      {/* ====== AI 今日行动摘要 ====== */}
-      <Card
-        style={{ marginBottom: 24, borderLeft: "4px solid #1677ff", background: "linear-gradient(135deg, #f0f5ff 0%, #e6f0ff 100%)" }}
-        title={<span style={{ fontSize: 16 }}><ThunderboltOutlined style={{ color: "#1677ff", marginRight: 8 }} />AI 今日行动摘要</span>}
-        extra={<Tag color="blue">Auto-generated 07:30</Tag>}
-      >
-        <Row gutter={[16, 8]}>
-          <Col span={8}>
-            <Card
-              size="small"
-              hoverable
-              role="link"
-              tabIndex={0}
-              className="interactive-card"
-              onClick={() => openPage("/dashboard/investment")}
-              onKeyDown={(event) => openPageWithKeyboard(event, "/dashboard/investment")}
-              style={{ borderLeft: "3px solid #52c41a" }}
-            >
-              <Statistic title="🟢 今日招商机会" value={report?.investment?.opportunities || 230} suffix="个" valueStyle={{ color: "#52c41a", fontSize: 22 }} />
-              <div style={{ fontSize: 11, color: "#999", marginTop: 4 }}>AI 推荐优先接触传感器方向企业</div>
-            </Card>
-          </Col>
-          <Col span={8}>
-            <Card
-              size="small"
-              hoverable
-              role="link"
-              tabIndex={0}
-              className="interactive-card"
-              onClick={() => openPage("/dashboard/risk")}
-              onKeyDown={(event) => openPageWithKeyboard(event, "/dashboard/risk")}
-              style={{ borderLeft: "3px solid #fa8c16" }}
-            >
-              <Statistic title="🟡 需关注风险" value={report?.risk_alerts?.length || 2} suffix="条" valueStyle={{ color: "#fa8c16", fontSize: 22 }} />
-              <div style={{ fontSize: 11, color: "#999", marginTop: 4 }}>建议本周走访 3 家风险上升企业</div>
-            </Card>
-          </Col>
-          <Col span={8}>
-            <Card
-              size="small"
-              hoverable
-              role="link"
-              tabIndex={0}
-              className="interactive-card"
-              onClick={() => openPage("/agent/chat?prompt=查找园区企业可申报的最新产业政策")}
-              onKeyDown={(event) => openPageWithKeyboard(event, "/agent/chat?prompt=查找园区企业可申报的最新产业政策")}
-              style={{ borderLeft: "3px solid #722ed1" }}
-            >
-              <Statistic title="🟣 政策窗口" value={report?.policy_updates || 3} suffix="条" valueStyle={{ color: "#722ed1", fontSize: 22 }} />
-              <div style={{ fontSize: 11, color: "#999", marginTop: 4 }}>2条政策即将截止，建议优先申报</div>
-            </Card>
-          </Col>
-        </Row>
-        <div style={{ marginTop: 16, padding: "12px 16px", background: "#fff", borderRadius: 8, border: "1px solid #e8e8e8" }}>
-          <Timeline
-            items={[
-              { color: "green", dot: <CheckCircleOutlined />, children: <span>AI 扫描 <b>12,580</b> 家企业完成 — 全部正常</span> },
-              { color: "blue", dot: <ThunderboltOutlined />, children: <span>AI 招商经理发现 <b>5</b> 家高价值企业 — 待审核</span> },
-              { color: "orange", dot: <WarningOutlined />, children: <span>风险雷达标记 <b>2</b> 条预警 — 需关注</span> },
-              { color: "purple", children: <span>政策顾问更新 <b>3</b> 条新政策 — 可为 12 家企业匹配</span> },
-              { color: "green", dot: <CheckCircleOutlined />, children: <span>今日 AI 运营日报已生成 — 园区运营稳定</span> },
-            ]}
-          />
-        </div>
-      </Card>
+    <div>
+      <PageHeader
+        title="园区运营总览"
+        description="把企业、招商、风险、政策和 AI 任务放进同一张运营地图。"
+        backTo="/agent/workspace"
+        backLabel="工作台"
+        extra={
+          <Button icon={<SyncOutlined spin={loading} />} loading={loading} onClick={() => void loadDashboard()}>
+            更新态势
+          </Button>
+        }
+      />
 
-      {/* ====== AI 运营日报 ====== */}
-      {report && (
-        <Card
-          title={<span><BulbOutlined style={{ color: "#fa8c16", marginRight: 8 }} />今日 AI 运营日报 — {report.date}</span>}
-          style={{ marginBottom: 24, borderLeft: "4px solid #fa8c16" }}
-        >
-          <Alert message={report.summary} type="info" showIcon style={{ marginBottom: 16 }} />
-          <Row gutter={[16, 8]}>
-            <Col span={6}><Statistic title="园区企业" value={report.park_metrics?.total_enterprises} suffix="家" /></Col>
-            <Col span={6}><Statistic title="招商机会" value={report.investment?.opportunities} suffix="个" valueStyle={{ color: "#1677ff" }} /></Col>
-            <Col span={6}><Statistic title="风险预警" value={report.risk_alerts?.length || 0} suffix="条" valueStyle={{ color: "#fa8c16" }} /></Col>
-            <Col span={6}><Statistic title="AI 任务" value={report.ai_tasks_completed} suffix="次" valueStyle={{ color: "#52c41a" }} /></Col>
-          </Row>
-          {report.risk_alerts?.length > 0 && (
-            <div style={{ marginTop: 12 }}>
-              <WarningOutlined style={{ color: "#fa8c16", marginRight: 8 }} /><span style={{ fontWeight: 600, fontSize: 13 }}>风险预警：</span>
-              {report.risk_alerts.map((a: any, i: number) => (
-                <Tag key={i} color={a.level === "HIGH" ? "red" : a.level === "MEDIUM" ? "orange" : "blue"} style={{ marginLeft: 8 }}>{a.enterprise}: {a.reason}</Tag>
-              ))}
-            </div>
-          )}
-          {report.recommendations?.length > 0 && (
-            <div style={{ marginTop: 12, padding: "8px 12px", background: "#f6ffed", borderRadius: 6 }}>
-              <strong style={{ color: "#52c41a" }}>AI 建议：</strong>
-              <ul style={{ margin: "4px 0 0 16px", fontSize: 13 }}>{report.recommendations.map((r: string, i: number) => <li key={i}>{r}</li>)}</ul>
-            </div>
-          )}
-        </Card>
+      {error && (
+        <Alert
+          type="error"
+          showIcon
+          message="园区数据加载失败"
+          description={error}
+          action={<Button onClick={() => void loadDashboard()}>重新加载</Button>}
+          style={{ marginBottom: 18 }}
+        />
       )}
 
-      {/* ====== KPI ====== */}
-      <h2 style={{ marginBottom: 16 }}>园区运营总览</h2>
-      <Row gutter={[16, 16]}>
-        <Col span={6}>
-          <Card hoverable role="link" tabIndex={0} className="interactive-card" onClick={() => openPage("/agent/chat?prompt=分析园区企业结构和产业分布")} onKeyDown={(event) => openPageWithKeyboard(event, "/agent/chat?prompt=分析园区企业结构和产业分布")}>
-            <Statistic title="企业总数" value={data?.park_overview?.total_enterprises || 0} suffix="家" valueStyle={{ color: "#1677ff" }} />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card hoverable role="link" tabIndex={0} className="interactive-card" onClick={() => openPage("/dashboard/investment")} onKeyDown={(event) => openPageWithKeyboard(event, "/dashboard/investment")}>
-            <Statistic title="招商机会" value={data?.investment?.opportunities || 0} suffix="个" prefix={<ArrowUpOutlined />} valueStyle={{ color: "#52c41a" }} />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card hoverable role="link" tabIndex={0} className="interactive-card" onClick={() => openPage("/dashboard/risk")} onKeyDown={(event) => openPageWithKeyboard(event, "/dashboard/risk")}>
-            <Statistic title="高风险企业" value={data?.risk?.high_risk || 0} suffix="家" prefix={<ArrowDownOutlined />} valueStyle={{ color: "#ff4d4f" }} />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card hoverable role="link" tabIndex={0} className="interactive-card" onClick={() => openPage("/agent/team")} onKeyDown={(event) => openPageWithKeyboard(event, "/agent/team")}>
-            <Statistic title="AI 任务数" value={data?.ai_operations?.agent_calls || 0} suffix="次/日" valueStyle={{ color: "#1677ff" }} />
-          </Card>
-        </Col>
-      </Row>
+      <section className="dashboard-hero" aria-label="园区今日态势">
+        <div className="dashboard-hero-copy">
+          <span className="dashboard-kicker">TODAY&apos;S PARK PULSE · {dataLabel}</span>
+          <h1>今天，园区最值得关注什么？</h1>
+          <p>
+            {report?.summary || "汇总企业、招商、风险与政策状态，让管理者从异常和机会出发，而不是从报表开始。"}
+          </p>
+          <div className="dashboard-hero-actions">
+            <Button type="primary" size="large" icon={<ThunderboltOutlined />} onClick={() => router.push("/agent/workspace")}>
+              发起 AI 研判
+            </Button>
+            <Button size="large" icon={<BarChartOutlined />} onClick={() => router.push("/dashboard/bi")}>
+              查看经营分析
+            </Button>
+          </div>
+        </div>
 
-      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
-        <Col span={12}>
-          <Card title="招商转化" extra={<Button type="link" onClick={() => openPage("/dashboard/investment")}>查看招商驾驶舱</Button>}>
-            <Table size="small" pagination={false}
-              dataSource={[
-                { key: "pool", stage: "目标企业池", count: data?.investment?.opportunities || 0, color: "blue" },
-                { key: "contact", stage: "接触中", count: 45, color: "cyan" },
-                { key: "signed", stage: "已签约", count: data?.investment?.signed || 0, color: "green" },
-              ]}
-              columns={[
-                { title: "阶段", dataIndex: "stage" }, { title: "数量", dataIndex: "count", render: (v: number, r: any) => <Tag color={r.color}>{v}</Tag> },
-              ]} />
-          </Card>
-        </Col>
-        <Col span={12}>
-          <Card title="风险分布" extra={<Button type="link" onClick={() => openPage("/dashboard/risk")}>查看风险预警</Button>}>
-            <Table size="small" pagination={false}
-              dataSource={[
-                { key: "high", level: "高风险", count: data?.risk?.high_risk || 0, color: "red" },
-                { key: "med", level: "中风险", count: data?.risk?.medium_risk || 0, color: "orange" },
-                { key: "low", level: "低风险", count: data?.risk?.low_risk || 0, color: "green" },
-              ]}
-              columns={[
-                { title: "等级", dataIndex: "level", render: (v: string, r: any) => <Tag color={r.color}>{v}</Tag> }, { title: "企业数", dataIndex: "count" },
-              ]} />
-          </Card>
-        </Col>
-      </Row>
-    </>
+        <div className="dashboard-hero-panel">
+          <div className="hero-panel-head">
+            <strong>运营状态</strong>
+            <Tag color="success" icon={<CheckCircleOutlined />}>系统在线</Tag>
+          </div>
+          <div className="hero-panel-list">
+            <div className="hero-panel-item"><i /><span>企业数据</span><b>{enterpriseCount} 家</b></div>
+            <div className="hero-panel-item"><i style={{ background: "#8ba49c" }} /><span>政策知识库</span><b>{policyCount} 条</b></div>
+            <div className="hero-panel-item"><i style={{ background: "#d3a15f" }} /><span>风险关注</span><b>{riskCount || (isDemo ? 0 : "待评估")}</b></div>
+            <div className="hero-panel-item"><i style={{ background: "#5fa89a" }} /><span>AI 协作任务</span><b>{agentCalls} 次</b></div>
+          </div>
+        </div>
+      </section>
+
+      {!isDemo && report?.investment?.data_available === false && (
+        <Alert
+          type="info"
+          showIcon
+          message="招商漏斗和风险评估等待业务系统接入"
+          description="当前只展示有公开来源的数据；缺失指标标记为待接入，不使用演示数字代替。"
+          style={{ marginBottom: 18 }}
+        />
+      )}
+
+      <section className="metric-grid" aria-label="核心运营指标">
+        {metrics.map((metric) => (
+          <button
+            type="button"
+            className="metric-card"
+            key={metric.label}
+            onClick={() => router.push(metric.path)}
+            style={{ "--metric-color": metric.color, "--metric-soft": metric.soft } as React.CSSProperties}
+          >
+            <div className="metric-card-head">
+              <span>{metric.label}</span>
+              <span className="metric-icon">{metric.icon}</span>
+            </div>
+            <div className="metric-value"><strong>{metric.value}</strong><span>{metric.unit}</span></div>
+            <div className="metric-foot">{metric.foot} <ArrowRightOutlined /></div>
+          </button>
+        ))}
+      </section>
+
+      <section className="dashboard-grid">
+        <div className="dashboard-section-card">
+          <div className="dashboard-section-head">
+            <div><h2>下一步行动</h2><p>从运营问题直接进入决策流程</p></div>
+            <Tag color={isDemo ? "orange" : "blue"}>{dataLabel}</Tag>
+          </div>
+          <div className="action-list">
+            {quickActions.map((action) => (
+              <button type="button" className="action-row" key={action.title} onClick={() => router.push(action.path)}>
+                <span className="action-row-icon" style={{ "--action-color": action.color, "--action-soft": action.soft } as React.CSSProperties}>{action.icon}</span>
+                <span className="action-row-copy"><strong>{action.title}</strong><span>{action.description}</span></span>
+                <span className="action-row-value">{action.value} <ArrowRightOutlined /></span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="dashboard-section-card">
+          <div className="dashboard-section-head">
+            <div><h2>AI 运营简报</h2><p>{report?.date || "今日"} · 自动汇总</p></div>
+            <RobotOutlined style={{ color: "#2563eb", fontSize: 21 }} />
+          </div>
+
+          {report ? (
+            <>
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, color: "#53627a", fontSize: 12 }}>
+                  <span>数据准备度</span><strong style={{ color: "#13213a" }}>{isDemo ? 100 : policyCount ? 72 : 38}%</strong>
+                </div>
+                <Progress percent={isDemo ? 100 : policyCount ? 72 : 38} showInfo={false} strokeColor={{ from: "#2563eb", to: "#06b6d4" }} />
+              </div>
+
+              {report.risk_alerts?.length > 0 && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={`${report.risk_alerts.length} 条风险需要关注`}
+                  description={report.risk_alerts.slice(0, 2).map((item: any) => item.enterprise).join("、")}
+                  style={{ marginBottom: 14 }}
+                />
+              )}
+
+              {report.recommendations?.length > 0 ? (
+                <div className="recommendation-box">
+                  <strong>今日建议</strong>
+                  <ul>{report.recommendations.slice(0, 4).map((item: string, index: number) => <li key={index}>{item}</li>)}</ul>
+                </div>
+              ) : (
+                <div className="recommendation-box"><strong>运行稳定</strong><div style={{ marginTop: 5 }}>暂无新的处置建议，可发起一次 AI 园区研判。</div></div>
+              )}
+            </>
+          ) : (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={loading ? "正在生成运营简报" : "暂无运营简报"} />
+          )}
+        </div>
+      </section>
+    </div>
   );
 }

@@ -14,10 +14,15 @@
 
 import logging
 from typing import Optional, List, Dict, Any
-from uuid import uuid4
-from datetime import datetime, timezone
+from uuid import NAMESPACE_URL, uuid4, uuid5
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
+
+
+def _utcnow_naive() -> datetime:
+    """Return UTC compatible with the schema's TIMESTAMP WITHOUT TIME ZONE."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class DatabaseTool:
@@ -53,8 +58,8 @@ class DatabaseTool:
                     existing.title = title or existing.title
                     existing.thread_id = thread_id or existing.thread_id
                     existing.message_count = (existing.message_count or 0) + 1
-                    existing.last_message_at = datetime.now(timezone.utc)
-                    existing.updated_time = datetime.now(timezone.utc)
+                    existing.last_message_at = _utcnow_naive()
+                    existing.updated_time = _utcnow_naive()
                 else:
                     conv = Conversation(
                         conversation_id=conv_id,
@@ -62,7 +67,7 @@ class DatabaseTool:
                         title=title,
                         thread_id=thread_id,
                         message_count=1,
-                        last_message_at=datetime.now(timezone.utc),
+                        last_message_at=_utcnow_naive(),
                     )
                     db.add(conv)
                 await db.commit()
@@ -133,7 +138,8 @@ class DatabaseTool:
                     existing.status = task.get("status", existing.status)
                     existing.result = task.get("result")
                     existing.plan = task.get("plan")
-                    existing.completed_time = datetime.now(timezone.utc)
+                    if existing.status in ("completed", "failed"):
+                        existing.completed_time = _utcnow_naive()
                 else:
                     at = AgentTask(
                         task_id=tid,
@@ -145,6 +151,11 @@ class DatabaseTool:
                         plan=task.get("plan"),
                         status=task.get("status", "created"),
                         result=task.get("result"),
+                        completed_time=(
+                            _utcnow_naive()
+                            if task.get("status") in ("completed", "failed")
+                            else None
+                        ),
                     )
                     db.add(at)
                 await db.commit()
@@ -183,29 +194,66 @@ class DatabaseTool:
     # ── Agent Execution ──
 
     async def save_agent_execution(self, execution: Dict[str, Any]) -> None:
-        """写入 agent_execution 记录"""
+        """Upsert one agent_execution record."""
         if not self.enabled:
             return
         try:
             from app.database.models.runtime import AgentExecution
             async for db in self._db():
-                ae = AgentExecution(
-                    execution_id=execution.get("execution_id", str(uuid4())),
-                    task_id=execution.get("task_id", ""),
-                    agent_name=execution.get("agent_name", ""),
-                    order_num=execution.get("order_num", 0),
-                    input=execution.get("input"),
-                    output=execution.get("output"),
-                    status=execution.get("status", ""),
-                    start_time=execution.get("start_time"),
-                    end_time=execution.get("end_time"),
-                    duration_ms=execution.get("duration_ms", 0),
-                    error=execution.get("error"),
+                from sqlalchemy import select
+                execution_id = execution.get("execution_id", str(uuid4()))
+                result = await db.execute(
+                    select(AgentExecution).where(
+                        AgentExecution.execution_id == execution_id
+                    )
                 )
-                db.add(ae)
+                ae = result.scalar_one_or_none()
+                if ae is None:
+                    ae = AgentExecution(execution_id=execution_id)
+                    db.add(ae)
+                ae.task_id = execution.get("task_id", "")
+                ae.agent_name = execution.get("agent_name", "")
+                ae.order_num = execution.get("order_num", 0)
+                ae.input = execution.get("input")
+                ae.output = execution.get("output")
+                ae.status = execution.get("status", "")
+                ae.start_time = execution.get("start_time")
+                ae.end_time = execution.get("end_time")
+                ae.duration_ms = execution.get("duration_ms", 0)
+                ae.error = execution.get("error")
                 await db.commit()
         except Exception as e:
             logger.warning("save_agent_execution failed: %s", e)
+
+    async def save_graph_executions(
+        self, task_id: str, agent_results: Dict[str, Any]
+    ) -> None:
+        """Persist normalized graph results using deterministic execution IDs."""
+        if not self.enabled:
+            return
+        finished = _utcnow_naive()
+        for order_num, (agent_name, result) in enumerate(agent_results.items(), start=1):
+            duration_ms = max(0, int(result.get("execution_time_ms", 0) or 0))
+            execution_id = str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"industrial-park/execution/{task_id}/{agent_name}",
+                )
+            )
+            await self.save_agent_execution(
+                {
+                    "execution_id": execution_id,
+                    "task_id": task_id,
+                    "agent_name": agent_name,
+                    "order_num": order_num,
+                    "output": result.get("result"),
+                    "status": result.get("status", "unknown"),
+                    "start_time": finished - timedelta(milliseconds=duration_ms),
+                    "end_time": finished,
+                    "duration_ms": duration_ms,
+                    "error": result.get("error"),
+                }
+            )
 
     # ── Agent Trace ──
 

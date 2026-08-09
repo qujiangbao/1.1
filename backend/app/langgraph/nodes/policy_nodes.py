@@ -1,11 +1,38 @@
 """Policy RAG Agent LangGraph Nodes"""
 import logging
+import re
 from typing import TypedDict, List, Optional, Dict, Any
 from langgraph.graph import StateGraph, END
 from app.tools.gateway import get_tool_gateway
 
 logger = logging.getLogger(__name__)
 tg = get_tool_gateway()
+
+
+_GENERIC_MATCH_TERMS = {
+    "广州", "广州市", "企业", "产业", "政策", "申报", "扶持", "产业扶持",
+}
+
+_DOMAIN_MATCH_TERMS = (
+    "机器人", "人工智能", "智能制造", "新能源", "新材料", "集成电路",
+    "生物医药", "数字化", "科技", "专精特新", "中小企业", "补贴",
+    "核心零部件", "系统集成", "工业软件", "中试", "人才",
+)
+
+
+def _matched_terms(query: str, *policy_text: object) -> list[str]:
+    terms = [
+        item.strip().lower()
+        for item in re.split(r"[\s,，。；;、/]+", query)
+        if len(item.strip()) >= 2
+    ]
+    query_lower = query.lower()
+    terms.extend(term for term in _DOMAIN_MATCH_TERMS if term in query_lower)
+    terms = list(dict.fromkeys(terms))
+    searchable = " ".join(str(item or "") for item in policy_text).lower()
+    matched = list(dict.fromkeys(term for term in terms if term in searchable))
+    specific = [term for term in matched if term not in _GENERIC_MATCH_TERMS]
+    return (specific or matched)[:6]
 
 
 class PolicyState(TypedDict):
@@ -85,26 +112,55 @@ def metadata_filter_node(state: PolicyState) -> PolicyState:
 
 def policy_matcher_node(state: PolicyState) -> PolicyState:
     chunks = state.get("filtered_chunks", [])
-    state["matched_policies"] = [
-        {
+    matched = []
+    for c in chunks:
+        metadata = c.get("metadata", {})
+        evidence = c.get("evidence", [])
+        source_url = metadata.get("source_url", "")
+        if not source_url and evidence:
+            source_url = evidence[0].get("url", "")
+        matched_terms = metadata.get("matched_terms") or _matched_terms(
+            state.get("query", ""),
+            metadata.get("title", c.get("title", "")),
+            c.get("content", ""),
+        )
+        matched.append({
             "policy_id": c.get("policy_id", ""),
-            "title": c.get("metadata", {}).get("title", c.get("title", "")),
+            "title": metadata.get("title", c.get("title", "")),
             "content_snippet": str(c.get("content", ""))[:200],
-            "level": c.get("metadata", {}).get("level", c.get("level", "")),
-            "department": c.get("metadata", {}).get("department", ""),
+            "level": metadata.get("level", c.get("level", "")),
+            "department": metadata.get("department", ""),
+            "document_number": metadata.get("document_number", ""),
+            "effective_date": metadata.get("effective_date", ""),
+            "expire_date": metadata.get("expire_date", ""),
+            "status": metadata.get("status", ""),
+            "source_url": source_url,
+            "source_type": metadata.get("source_type", "public_policy"),
+            "source_title": metadata.get("source_title", ""),
             "match_score": round(c.get("score", 0.7) * 100),
-        }
-        for c in chunks
-    ]
+            "matched_terms": matched_terms,
+            "requirements": metadata.get(
+                "requirements",
+                c.get("requirements", []),
+            ),
+        })
+    state["matched_policies"] = matched
     state["status"] = "formatting"
     return state
 
 
 def response_formatter_node(state: PolicyState) -> PolicyState:
+    returned_count = len(state.get("matched_policies", []))
     state["report"] = {
         "query": state["query"],
-        "total_matched": len(state.get("matched_policies", [])),
+        "total_matched": returned_count,
+        "returned_count": returned_count,
+        "retrieval_limit": 10,
+        "is_exhaustive": False,
+        "scope_note": "按当前查询相关度返回前 10 条候选政策，不代表完整政策清单",
         "policies": state.get("matched_policies", []),
+        "search_mode": state.get("search_mode", "unknown"),
+        "data_sources": state.get("data_sources", []),
     }
     state["status"] = "done"
     return state

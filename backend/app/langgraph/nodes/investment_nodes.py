@@ -59,6 +59,7 @@ def scoring_node(state: InvestmentState) -> InvestmentState:
     for p in state.get("profiles", []):
         result = tg.invoke("InvestmentAgent", "investment_scoring", {"enterprise_id": p.get("enterprise_id", "")})
         score_data = result.data or {}
+        score = score_data.get("score")
         scores.append({
             "enterprise_id": p.get("enterprise_id"),
             "name": p.get("name", ""),
@@ -66,18 +67,25 @@ def scoring_node(state: InvestmentState) -> InvestmentState:
             "location": p.get("location", ""),
             "registered_capital": p.get("registered_capital", ""),
             "match_reason": p.get("match_reason", ""),
-            "score": score_data.get("score", 50),
-            "level": _score_level(score_data.get("score", 50)),
+            "score": score,
+            "level": _score_level(score),
             "match_reasons": score_data.get("reasons", []),
         })
-    scores.sort(key=lambda s: s["score"], reverse=True)
+    scores.sort(
+        key=lambda item: (
+            item["score"] is not None,
+            item["score"] if item["score"] is not None else 0,
+        ),
+        reverse=True,
+    )
     state["scores"] = scores
     state["tools_used"].append("investment_scoring")
     state["status"] = "recommending"
     return state
 
 
-def _score_level(score: float) -> str:
+def _score_level(score: float | None) -> str:
+    if score is None: return "DATA_INSUFFICIENT"
     if score >= 85: return "STRONG_RECOMMEND"
     if score >= 70: return "RECOMMEND"
     if score >= 50: return "CONSIDER"
@@ -90,8 +98,12 @@ def recommendation_node(state: InvestmentState) -> InvestmentState:
         score = s["score"]
         recs.append({
             **s,
-            "action": {85: "优先接触", 70: "积极跟进", 50: "保持关注"}.get(
-                next((t for t in [85, 70, 50] if score >= t), 0), "暂不跟进"
+            "action": (
+                "待补充经营与知识产权数据"
+                if score is None
+                else {85: "优先接触", 70: "积极跟进", 50: "保持关注"}.get(
+                    next((t for t in [85, 70, 50] if score >= t), 0), "暂不跟进"
+                )
             ),
         })
     state["recommendations"] = recs
@@ -100,9 +112,16 @@ def recommendation_node(state: InvestmentState) -> InvestmentState:
 
 
 def strategy_generator_node(state: InvestmentState) -> InvestmentState:
-    top = state.get("recommendations", [])[:5]
+    top = [
+        item for item in state.get("recommendations", [])
+        if item.get("level") in ("STRONG_RECOMMEND", "RECOMMEND")
+    ][:5]
     state["strategy"] = {
-        "summary": f"基于{state.get('industry', '目标')}产业分析，推荐{len(top)}家高价值企业",
+        "summary": (
+            f"基于现有可验证评分，推荐 {len(top)} 家企业进入人工复核。"
+            if top
+            else "已检索公开企业快照，但评分字段不足，未生成自动推荐名单。"
+        ),
         "targets": [{"name": t["name"], "score": t["score"], "action": t["action"]} for t in top],
     }
     state["status"] = "generating_report"

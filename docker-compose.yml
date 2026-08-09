@@ -14,7 +14,7 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       backend:
-        condition: service_healthy
+        condition: service_started
       frontend:
         condition: service_started
     restart: unless-stopped
@@ -25,18 +25,24 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     env_file:
-      - .env.production
+      - ${ENV_FILE:-.env.production}
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
     depends_on:
       postgres:
-        condition: service_healthy
+        condition: service_started
       redis:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3)"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 30s
+    volumes:
+      - supervisor_checkpoints:/app/data/checkpoints
+      - park_documents:/app/data/park_documents
+      - policy_snapshots:/app/data/policy_snapshots
     restart: unless-stopped
 
   # ── Frontend (Next.js) ──
@@ -46,22 +52,23 @@ services:
       dockerfile: Dockerfile
       args:
         BACKEND_INTERNAL_URL: http://backend:8000
+        CACHE_BUST: ${CACHE_BUST:-0}
     depends_on:
       backend:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
 
   # ── PostgreSQL 16 + pgvector ──
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_DB: industrial_park
-      POSTGRES_USER: industrial
-      POSTGRES_PASSWORD: industrial
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U industrial -d industrial_park"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -84,3 +91,6 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  supervisor_checkpoints:
+  park_documents:
+  policy_snapshots:

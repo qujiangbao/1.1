@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Card, Row, Col, Statistic, Progress, Tag, Alert } from "antd";
+import { useCallback, useEffect, useState } from "react";
+import { Alert, Button, Card, Col, Empty, Progress, Row, Statistic, Tag } from "antd";
 import {
   ArrowUpOutlined, ArrowDownOutlined, ThunderboltOutlined,
-  BulbOutlined, WarningOutlined, RiseOutlined, BarChartOutlined,
+  BulbOutlined, WarningOutlined, RiseOutlined, BarChartOutlined, SyncOutlined,
 } from "@ant-design/icons";
-import { apiFetch } from "@/api/fetch";
+import { apiJson } from "@/api/fetch";
+import { useDataMode } from "@/contexts/DataModeContext";
+import PageHeader from "@/components/layout/PageHeader";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
@@ -17,10 +19,16 @@ interface BIData {
   risk_trend: RiskTrendItem[];
   ai_usage: AIUsageItem[];
   insights: Insights;
+  metadata: {
+    is_demo: boolean;
+    disclaimer?: string | null;
+    investment_funnel_data_available: boolean;
+    risk_data_available?: boolean;
+  };
 }
 
 interface KpiCard {
-  key: string; title: string; value: number; unit: string;
+  key: string; title: string; value: number | null; unit: string;
   trend: string; trend_up: boolean; color: string;
 }
 
@@ -49,35 +57,56 @@ interface Insights {
 /* ===== Inline chart components (no external deps) ===== */
 
 function BarChart({ data, maxVal }: { data: IndustryItem[]; maxVal: number }) {
+  const [hoverName, setHoverName] = useState<string | null>(null);
+  if (!data.length) {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无企业产业分布数据" />;
+  }
   return (
     <div style={{ display: "flex", alignItems: "flex-end", gap: 12, height: 220, paddingTop: 8 }}>
-      {data.map((d) => (
+      {data.map((d) => {
+        const active = hoverName === d.name;
+        return (
         <div key={d.name} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", height: "100%", justifyContent: "flex-end" }}>
-          <span style={{ fontSize: 11, color: "#666", marginBottom: 2, fontWeight: 600 }}>
-            {d.pct}%
+          <span style={{ fontSize: 11, color: active ? "#1677ff" : "#666", marginBottom: 2, fontWeight: active ? 700 : 600 }}>
+            {active ? `${d.value}家` : `${d.pct}%`}
           </span>
-          <div style={{
-            width: "100%", maxWidth: 60,
-            height: `${(d.value / maxVal) * 180}px`,
-            background: `linear-gradient(180deg, ${d.color}cc, ${d.color}44)`,
-            borderRadius: "6px 6px 0 0",
-            transition: "height 0.6s ease",
-            position: "relative",
-          }}>
+          <div
+            onMouseEnter={() => setHoverName(d.name)}
+            onMouseLeave={() => setHoverName(null)}
+            style={{
+              width: "100%", maxWidth: 60, cursor: "pointer",
+              height: `${(d.value / maxVal) * 180}px`,
+              background: active
+                ? `linear-gradient(180deg, ${d.color}, ${d.color}88)`
+                : `linear-gradient(180deg, ${d.color}cc, ${d.color}44)`,
+              borderRadius: "6px 6px 0 0",
+              transition: "height 0.6s ease, opacity 0.2s",
+              position: "relative",
+              opacity: hoverName && !active ? 0.5 : 1,
+            }}>
             <span style={{
               position: "absolute", bottom: -22, left: "50%", transform: "translateX(-50%)",
-              fontSize: 11, color: "#999", whiteSpace: "nowrap",
+              fontSize: 11, color: active ? "#1677ff" : "#999", whiteSpace: "nowrap",
+              fontWeight: active ? 600 : 400,
             }}>
               {d.name}
             </span>
           </div>
         </div>
-      ))}
+      )})}
     </div>
   );
 }
 
 function FunnelChart({ data }: { data: FunnelItem[] }) {
+  if (!data.length || data.every((item) => item.count === 0)) {
+    return (
+      <Empty
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description="招商漏斗业务表尚未接入"
+      />
+    );
+  }
   const maxCount = data[0]?.count || 1;
   const barColors = ["#1677ff", "#52c41a", "#faad14", "#fa8c16", "#ff4d4f"];
   return (
@@ -106,42 +135,91 @@ function FunnelChart({ data }: { data: FunnelItem[] }) {
 }
 
 function RiskTrendChart({ data }: { data: RiskTrendItem[] }) {
-  const svgW = 500, svgH = 180, pad = { top: 10, right: 20, bottom: 30, left: 35 };
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  if (!data.length) {
+    return (
+      <Empty
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description="暂无真实风险历史记录"
+      />
+    );
+  }
+  const svgW = 500, svgH = 200, pad = { top: 10, right: 20, bottom: 30, left: 35 };
   const w = svgW - pad.left - pad.right;
   const h = svgH - pad.top - pad.bottom;
   const maxY = 600;
+  const colors: Record<string, string> = { high: "#ff4d4f", medium: "#faad14", low: "#52c41a" };
+  const labels: Record<string, string> = { high: "高风险", medium: "中风险", low: "低风险" };
 
   const points = (key: "high" | "medium" | "low") =>
     data.map((d, i) => {
-      const x = pad.left + (i / (data.length - 1)) * w;
+      const x = pad.left + (i / Math.max(data.length - 1, 1)) * w;
       const y = pad.top + h - (d[key] / maxY) * h;
       return `${x},${y}`;
     }).join(" ");
 
+  const hoverData = hoverIdx !== null ? data[hoverIdx] : null;
+  const hoverX = hoverIdx !== null ? pad.left + (hoverIdx / Math.max(data.length - 1, 1)) * w : 0;
+
   return (
-    <svg viewBox={`0 0 ${svgW} ${svgH}`} style={{ width: "100%", height: 200 }}>
-      {/* Grid lines */}
-      {[0, 200, 400, 600].map((v) => {
-        const y = pad.top + h - (v / maxY) * h;
-        return <g key={v}>
-          <line x1={pad.left} y1={y} x2={svgW - pad.right} y2={y} stroke="#f0f0f0" strokeWidth={1} />
-          <text x={pad.left - 6} y={y + 4} textAnchor="end" fontSize={10} fill="#999">{v}</text>
-        </g>;
-      })}
-      {/* Lines */}
-      <polyline points={points("low")} fill="none" stroke="#52c41a" strokeWidth={2} />
-      <polyline points={points("medium")} fill="none" stroke="#faad14" strokeWidth={2} />
-      <polyline points={points("high")} fill="none" stroke="#ff4d4f" strokeWidth={2} />
-      {/* X labels */}
-      {data.map((d, i) => (
-        <text key={d.month} x={pad.left + (i / (data.length - 1)) * w} y={svgH - 8}
-              textAnchor="middle" fontSize={10} fill="#999">{d.month}</text>
-      ))}
-    </svg>
+    <div style={{ position: "relative" }}>
+      {hoverData && (
+        <div style={{
+          position: "absolute", top: 4, left: hoverX,
+          transform: "translateX(-50%)", background: "#333", color: "#fff", borderRadius: 6,
+          padding: "6px 10px", fontSize: 12, zIndex: 10, whiteSpace: "nowrap",
+          pointerEvents: "none",
+        }}>
+          <strong>{hoverData.month}</strong>
+          <div style={{ marginTop: 2 }}>
+            {(["high","medium","low"] as const).map((k) => (
+              <span key={k} style={{ color: colors[k], marginRight: 8 }}>
+                {labels[k]}: {hoverData[k]}家
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      <svg viewBox={`0 0 ${svgW} ${svgH}`} style={{ width: "100%", height: 200 }}>
+        {[0, 200, 400, 600].map((v) => {
+          const y = pad.top + h - (v / maxY) * h;
+          return <g key={v}>
+            <line x1={pad.left} y1={y} x2={svgW - pad.right} y2={y} stroke="#f0f0f0" strokeWidth={1} />
+            <text x={pad.left - 6} y={y + 4} textAnchor="end" fontSize={10} fill="#999">{v}</text>
+          </g>;
+        })}
+        {(["low","medium","high"] as const).map((k) => (
+          <polyline key={k} points={points(k)} fill="none" stroke={colors[k]} strokeWidth={2} />
+        ))}
+        {data.map((d, i) => {
+          const x = pad.left + (i / Math.max(data.length - 1, 1)) * w;
+          return (
+            <g key={d.month}>
+              <rect x={x - 12} y={pad.top} width={24} height={h}
+                    fill="transparent" style={{ cursor: "pointer" }}
+                    onMouseEnter={() => setHoverIdx(i)}
+                    onMouseLeave={() => setHoverIdx(null)} />
+              <text x={x} y={svgH - 8} textAnchor="middle" fontSize={10}
+                    fill={hoverIdx === i ? "#1677ff" : "#999"} fontWeight={hoverIdx === i ? 600 : 400}>
+                {d.month}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
   );
 }
 
 function AIUsageBreakdown({ data }: { data: AIUsageItem[] }) {
+  if (!data.length) {
+    return (
+      <Empty
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description="今日暂无 Agent 调用记录"
+      />
+    );
+  }
   const colors = ["#1677ff", "#52c41a", "#faad14", "#722ed1", "#13c2c2", "#eb2f96"];
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "8px 0" }}>
@@ -169,46 +247,70 @@ function AIUsageBreakdown({ data }: { data: AIUsageItem[] }) {
 /* ===== Main Page ===== */
 
 export default function BIDashboardPage() {
+  const { mode, isDemo } = useDataMode();
   const [data, setData] = useState<BIData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await apiJson<{ success: boolean; data: BIData }>(
+        `${API}/dashboard/bi?mode=${mode}`,
+      );
+      setData(response.data);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "数据加载失败");
+    } finally {
+      setLoading(false);
+    }
+  }, [mode]);
 
   useEffect(() => {
-    apiFetch(`${API}/dashboard/bi`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.success) setData(d.data);
-      })
-      .finally(() => setLoading(false));
-  }, []);
+    void loadData();
+  }, [loadData]);
 
   if (loading) {
     return (
       <Card loading style={{ minHeight: 600 }}>
         <div style={{ textAlign: "center", padding: 60, color: "#999" }}>
           <ThunderboltOutlined style={{ fontSize: 48, marginBottom: 16 }} />
-          <div>AI 正在生成 BI 驾驶舱...</div>
+          <div>AI 正在生成经营分析看板...</div>
         </div>
       </Card>
     );
   }
 
-  if (!data) return <Alert type="error" message="数据加载失败" showIcon />;
+  if (!data) {
+    return (
+      <Alert
+        type="error"
+        message="数据加载失败"
+        description={error}
+        showIcon
+        action={<Button onClick={loadData}>重试</Button>}
+      />
+    );
+  }
 
-  const maxIndustryVal = Math.max(...data.industry_distribution.map((d) => d.value));
+  const maxIndustryVal = Math.max(
+    1,
+    ...data.industry_distribution.map((item) => item.value),
+  );
 
   return (
     <div style={{ maxWidth: 1400, margin: "0 auto" }}>
-      {/* Page Header */}
-      <div style={{ marginBottom: 24, display: "flex", alignItems: "center", gap: 12 }}>
-        <BarChartOutlined style={{ fontSize: 28, color: "#1677ff" }} />
-        <div>
-          <h2 style={{ margin: 0, fontSize: 22 }}>BI 智能驾驶舱</h2>
-          <span style={{ fontSize: 13, color: "#999" }}>
-            AI 驱动的园区运营数据可视化分析平台
-          </span>
-        </div>
-        <Tag color="processing" style={{ marginLeft: "auto" }}>实时更新</Tag>
-      </div>
+      <PageHeader
+        title={<><BarChartOutlined style={{ color: "#1677ff", marginRight: 8 }} />经营分析看板</>}
+        description="聚合园区经营指标、产业分布、招商漏斗与风险趋势。"
+        backLabel="返回园区运营总览"
+        extra={
+          <Button icon={<SyncOutlined />} onClick={() => void loadData()}>
+            刷新数据
+          </Button>
+        }
+      />
 
       {/* ===== Row 1: KPI Cards ===== */}
       <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
@@ -224,7 +326,7 @@ export default function BIDashboardPage() {
             >
               <Statistic
                 title={<span style={{ fontSize: 13, color: "#666" }}>{card.title}</span>}
-                value={card.value}
+                value={card.value ?? "待接入"}
                 suffix={card.unit}
                 valueStyle={{ color: card.color, fontSize: 28, fontWeight: 700 }}
               />
@@ -232,7 +334,7 @@ export default function BIDashboardPage() {
                 <span style={{ color: card.trend_up ? "#52c41a" : "#ff4d4f", fontWeight: 600 }}>
                   {card.trend_up ? <ArrowUpOutlined /> : <ArrowDownOutlined />} {card.trend}
                 </span>
-                <span style={{ color: "#999", marginLeft: 4 }}>较上月</span>
+                {isDemo && <span style={{ color: "#999", marginLeft: 4 }}>演示口径</span>}
               </div>
             </Card>
           </Col>
@@ -266,7 +368,11 @@ export default function BIDashboardPage() {
             title={<span><RiseOutlined style={{ color: "#52c41a", marginRight: 8 }} />招商转化漏斗</span>}
             extra={<span style={{ fontSize: 12, color: "#999" }}>本月</span>}
           >
-            <FunnelChart data={data.investment_funnel} />
+            {data.metadata.investment_funnel_data_available ? (
+              <FunnelChart data={data.investment_funnel} />
+            ) : (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="招商漏斗待接入" />
+            )}
           </Card>
         </Col>
       </Row>
@@ -284,7 +390,11 @@ export default function BIDashboardPage() {
               </div>
             }
           >
-            <RiskTrendChart data={data.risk_trend} />
+            {data.metadata.risk_data_available ? (
+              <RiskTrendChart data={data.risk_trend} />
+            ) : (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="风险趋势尚未评估" />
+            )}
           </Card>
         </Col>
 

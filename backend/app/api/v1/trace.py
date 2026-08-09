@@ -14,7 +14,7 @@ async def get_trace(task_id: str):
     try:
         graph = await get_supervisor_graph()
         config = {"configurable": {"thread_id": task_id}}
-        state = graph.get_state(config)
+        state = await graph.aget_state(config)
 
         if state is None or not state.values:
             raise HTTPException(status_code=404, detail="Task not found or trace not yet generated")
@@ -26,12 +26,13 @@ async def get_trace(task_id: str):
 
         nodes = [{"id": "supervisor", "label": "Supervisor", "type": "supervisor"}]
         for agent_name, ar in agent_results.items():
+            result = ar.get("result") or {}
             nodes.append({
                 "id": agent_name.lower(),
                 "label": agent_name,
                 "type": "agent",
                 "status": ar.get("status", "unknown"),
-                "result": _truncate(ar.get("result", {}).get("summary", ""), 100),
+                "result": _truncate(result.get("summary", ""), 100),
                 "execution_time_ms": ar.get("execution_time_ms", 0),
             })
 
@@ -79,6 +80,8 @@ async def get_trace(task_id: str):
             task_plan=plan_summary,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning(f"Trace retrieval failed for {task_id}: {e}")
         raise HTTPException(status_code=503, detail=f"Trace unavailable: {str(e)}")
@@ -106,11 +109,12 @@ def _fallback_trace(task_id: str, reason: str) -> TraceResponse:
 def _minimal_steps(agent_results: dict) -> list:
     steps = []
     for i, (name, ar) in enumerate(agent_results.items()):
+        result = ar.get("result") or {}
         steps.append({
             "step": i + 1,
             "type": "agent_call",
             "agent": name,
-            "action": ar.get("result", {}).get("summary", "")[:80],
+            "action": result.get("summary", "")[:80],
             "input": {},
             "output": {"status": ar.get("status")},
             "timestamp": "",

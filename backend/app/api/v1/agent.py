@@ -1,8 +1,11 @@
 """Agent Chat API — 用户对话核心入口 (P3: Streaming Support)"""
 import asyncio
 import time
+from datetime import datetime
 from uuid import uuid4
-from fastapi import APIRouter
+from zoneinfo import ZoneInfo
+from fastapi import APIRouter, Depends
+from app.core.security import UserContext, create_stream_token, require_user
 from app.schemas.agent import ChatRequest, ChatResponse, CheckpointStatus
 from app.langgraph.graph import get_supervisor_graph
 
@@ -10,7 +13,10 @@ router = APIRouter()
 
 
 @router.post("/agent/chat", response_model=ChatResponse)
-async def agent_chat(request: ChatRequest):
+async def agent_chat(
+    request: ChatRequest,
+    user: UserContext = Depends(require_user),
+):
     """用户对话入口：接受自然语言 → Supervisor → Agent → 返回结果
 
     P3 双模式:
@@ -23,6 +29,11 @@ async def agent_chat(request: ChatRequest):
     conversation_id = request.conversation_id or str(uuid4())
     task_id = str(uuid4())
     started = time.perf_counter()
+    requested_mode = (
+        str((request.context or {}).get("data_mode", "real")).strip().lower()
+    )
+    data_mode = "demo" if requested_mode == "demo" else "real"
+    current_date = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
 
     # P2: DB tool + 对话历史
     from app.tools.database_tool import get_database_tool
@@ -31,17 +42,29 @@ async def agent_chat(request: ChatRequest):
 
     await db_tool.save_conversation(
         conv_id=conversation_id,
-        user_id=request.context.get("user_id", "demo-user") if request.context else "demo-user",
+        user_id=user.user_id,
         title=request.message[:50],
         thread_id=conversation_id,
     )
 
     graph = await get_supervisor_graph()
     state = {
-        "user_id": request.context.get("user_id", "demo-user") if request.context else "demo-user",
+        "user_id": user.user_id,
         "conversation_id": conversation_id,
         "user_query": request.message,
-        "user_role": "park_manager",
+        "user_role": user.role,
+        "data_mode": data_mode,
+        "current_date": current_date,
+        "data_context": {
+            "mode": data_mode,
+            "label": "演示沙盘" if data_mode == "demo" else "公开数据快照",
+            "is_demo": data_mode == "demo",
+            "evidence_contract": (
+                "演示指标只能来自固定合成场景，并必须明确标注非真实经营数据。"
+                if data_mode == "demo"
+                else "数字、企业名称和结论必须来自工具结果；缺少证据时写待接入或尚未评估。"
+            ),
+        },
         "messages": [],
         "history_messages": history,
         "status": "idle",
@@ -59,12 +82,13 @@ async def agent_chat(request: ChatRequest):
             graph, state, config, task_id, conversation_id, db_tool, request.message,
         ))
         logger.info("[P3] Streaming task started: %s", task_id)
+        stream_token = create_stream_token(task_id, user.user_id)
         return ChatResponse(
             task_id=task_id,
             conversation_id=conversation_id,
             status="processing",
             response=None,
-            stream_url=f"/api/v1/agent/stream/{task_id}",
+            stream_url=f"/api/v1/agent/stream/{task_id}?token={stream_token}",
         )
 
     # === v1.2 兼容: 同步执行 ===
@@ -85,6 +109,9 @@ async def agent_chat(request: ChatRequest):
         "status": result.get("status", "completed"),
         "result": {"response": response_text, "agents_used": agents_used},
     })
+    await db_tool.save_graph_executions(
+        task_id, result.get("agent_results", {})
+    )
 
     await db_tool.save_message(conversation_id, "user", request.message)
     if response_text:

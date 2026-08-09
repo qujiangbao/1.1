@@ -1,5 +1,9 @@
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 engine = None
 SessionLocal = None
@@ -16,13 +20,21 @@ async def init_db(database_url: str):
     engine = create_async_engine(database_url, echo=False, pool_size=10)
     SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
-    # P5: Run Alembic migrations instead of create_all
-    _run_migrations()
+    try:
+        # Alembic's async environment owns its event loop, so run it outside
+        # FastAPI's active loop. Any failure must abort database-enabled startup.
+        await asyncio.to_thread(_run_migrations)
 
-    # P4: Seed RBAC data
-    async with SessionLocal() as session:
-        from app.database.models.rbac import seed_rbac_data
-        await seed_rbac_data(session)
+        # P4: Seed RBAC data
+        async with SessionLocal() as session:
+            from app.database.models.rbac import seed_rbac_data
+            await seed_rbac_data(session)
+    except Exception:
+        logger.exception("Database initialization failed")
+        await engine.dispose()
+        engine = None
+        SessionLocal = None
+        raise
 
 
 def _run_migrations():
@@ -35,18 +47,12 @@ def _run_migrations():
     alembic_ini = os.path.join(os.path.dirname(__file__), "..", "..", "alembic.ini")
 
     if not os.path.exists(alembic_ini):
-        return  # Migration not configured
+        raise FileNotFoundError(f"Alembic configuration not found: {alembic_ini}")
 
     alembic_cfg = Config(alembic_ini)
     alembic_cfg.set_main_option("script_location", migrations_path)
 
-    try:
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(command.upgrade, alembic_cfg, "head")
-            future.result(timeout=60)
-    except Exception:
-        pass  # Allow startup without DB (demo mode)
+    command.upgrade(alembic_cfg, "head")
 
 
 async def close_db():

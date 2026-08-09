@@ -112,6 +112,15 @@ ROLE_PERMISSION_MAP = {
 }
 
 
+def _password_matches(password: str, password_hash: str) -> bool:
+    import bcrypt
+
+    try:
+        return bcrypt.checkpw(password.encode(), password_hash.encode())
+    except ValueError:
+        return False
+
+
 async def seed_rbac_data(db_session):
     """种子数据插入 (幂等 — 存在则跳过)"""
     from sqlalchemy import select
@@ -179,29 +188,64 @@ async def seed_rbac_data(db_session):
                         role_id=role.role_id, permission_id=perm.permission_id,
                     ))
 
-    # Default admin user
+    # Bootstrap/synchronize the configured admin user. ADMIN_PASSWORD is the
+    # production source of truth; never leave the historical demo password in
+    # a database-backed authentication deployment.
+    from app.config import get_settings
+    settings = get_settings()
     import bcrypt
-    admin_hash = bcrypt.hashpw("admin123".encode(), bcrypt.gensalt()).decode()
     existing_admin = await db_session.execute(
-        select(User).where(User.username == "admin")
+        select(User).where(User.username == settings.admin_username)
     )
-    if existing_admin.scalar_one_or_none() is None:
-        db_session.add(User(
+    admin_user = existing_admin.scalar_one_or_none()
+    if admin_user is None:
+        bootstrap_admin = await db_session.execute(
+            select(User).where(User.user_id == "user-admin-001")
+        )
+        admin_user = bootstrap_admin.scalar_one_or_none()
+
+    if admin_user is None:
+        admin_user = User(
             user_id="user-admin-001",
-            username="admin",
-            password_hash=admin_hash,
+            username=settings.admin_username,
+            password_hash=bcrypt.hashpw(
+                settings.admin_password.encode(),
+                bcrypt.gensalt(),
+            ).decode(),
             display_name="系统管理员",
             is_active=True,
-        ))
-        await db_session.flush()
-        # Assign super_admin role
-        super_role = await db_session.execute(
-            select(Role).where(Role.name == "super_admin")
         )
-        super_role = super_role.scalar_one_or_none()
-        if super_role:
+        db_session.add(admin_user)
+    else:
+        admin_user.username = settings.admin_username
+        admin_user.is_active = True
+        if not _password_matches(
+            settings.admin_password,
+            admin_user.password_hash,
+        ):
+            admin_user.password_hash = bcrypt.hashpw(
+                settings.admin_password.encode(),
+                bcrypt.gensalt(),
+            ).decode()
+
+    await db_session.flush()
+
+    # Ensure the configured admin always has the super_admin role.
+    super_role = await db_session.execute(
+        select(Role).where(Role.name == "super_admin")
+    )
+    super_role = super_role.scalar_one_or_none()
+    if super_role:
+        existing_admin_role = await db_session.execute(
+            select(UserRole).where(
+                UserRole.user_id == admin_user.user_id,
+                UserRole.role_id == super_role.role_id,
+            )
+        )
+        if existing_admin_role.scalar_one_or_none() is None:
             db_session.add(UserRole(
-                user_id="user-admin-001", role_id=super_role.role_id,
+                user_id=admin_user.user_id,
+                role_id=super_role.role_id,
             ))
 
     await db_session.commit()

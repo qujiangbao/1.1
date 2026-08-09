@@ -11,12 +11,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    sed '/^reportlab==/d' requirements.txt > /tmp/requirements-base.txt && \
+    pip install \
+    --no-cache-dir \
+    --retries 8 \
+    --timeout 600 \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --trusted-host pypi.tuna.tsinghua.edu.cn \
+    -r /tmp/requirements-base.txt && \
+    pip install \
+    --no-cache-dir \
+    --no-deps \
+    --retries 8 \
+    --timeout 600 \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --trusted-host pypi.tuna.tsinghua.edu.cn \
+    reportlab==4.4.3
 
 COPY . .
 
-# Ensure migrations directory is included
-RUN mkdir -p migrations/versions
+# Ensure migration and persistent-volume mount points exist with app ownership.
+# Docker copies this ownership into a newly created named volume.
+RUN mkdir -p migrations/versions data/park_documents data/policy_snapshots
 
 RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
 USER appuser

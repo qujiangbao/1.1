@@ -2,6 +2,7 @@
 from sqlalchemy import Column, String, Integer, Float, Text, Date, DateTime, Boolean, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY
 from sqlalchemy.orm import relationship
+from app.database.vector_type import Vector
 from app.database.session import Base
 from datetime import datetime
 
@@ -68,6 +69,9 @@ class Policy(Base):
     expire_date = Column(Date)
     status = Column(String(30), default="active")
     source = Column(String(500))
+    eligibility_conditions = Column(JSONB, nullable=False, default=list)
+    conditions_reviewed_at = Column(DateTime)
+    conditions_reviewed_by = Column(String(50))
 
 
 class PolicyDocument(Base):
@@ -100,6 +104,7 @@ class PolicyChunk(Base):
     content = Column(Text, nullable=False)
     content_hash = Column(String(64))
     token_count = Column(Integer)
+    embedding = Column(Vector(1536))
     metadata_ = Column("metadata", JSONB, default={})
     created_at = Column(DateTime, default=datetime.utcnow)
 

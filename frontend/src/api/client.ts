@@ -15,4 +15,20 @@ client.interceptors.request.use((config) => {
   return config;
 });
 
+client.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (typeof window !== "undefined" && error?.response?.status === 401) {
+      localStorage.removeItem("token");
+      localStorage.removeItem("refresh_token");
+      localStorage.removeItem("user");
+      if (!window.location.pathname.startsWith("/auth/")) {
+        const returnTo = `${window.location.pathname}${window.location.search}`;
+        window.location.replace(`/auth/login?returnTo=${encodeURIComponent(returnTo)}`);
+      }
+    }
+    return Promise.reject(error);
+  },
+);
+
 export default client;

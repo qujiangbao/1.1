@@ -19,6 +19,7 @@ class UserContext:
     username: str = "demo"
     role: str = "park_manager"
     park_id: Optional[str] = None
+    display_name: Optional[str] = None
 
 
 # ═══ Token 生成/验证 ═══
@@ -43,12 +44,41 @@ def create_refresh_token(user_id: str) -> str:
     )
 
 
+def create_stream_token(task_id: str, user_id: str, expires_minutes: int = 10) -> str:
+    """Create a short-lived token scoped to one Agent SSE task.
+
+    Browser ``EventSource`` cannot attach the normal Authorization header. A
+    task-scoped token keeps the stream usable without exposing other tasks.
+    """
+    now = datetime.now(timezone.utc)
+    return jwt.encode(
+        {
+            "sub": user_id,
+            "task_id": task_id,
+            "iat": now,
+            "exp": now + timedelta(minutes=expires_minutes),
+            "type": "agent_stream",
+        },
+        settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+    )
+
+
 def verify_token(token: str) -> dict | None:
     """验证并解码 JWT Token"""
     try:
         return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     except JWTError:
         return None
+
+
+def verify_stream_token(token: str, task_id: str) -> bool:
+    """Verify that a short-lived stream token belongs to ``task_id``."""
+    payload = verify_token(token)
+    if not payload or payload.get("type") != "agent_stream":
+        return False
+    token_task_id = str(payload.get("task_id", ""))
+    return bool(token_task_id) and compare_digest(token_task_id, str(task_id))
 
 
 def hash_password(password: str) -> str:

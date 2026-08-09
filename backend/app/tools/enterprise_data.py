@@ -118,11 +118,16 @@ class EnterpriseDataTool:
             if isinstance(self.adapter, MockAdapter):
                 result = asyncio.run(self.adapter.compute_scoring(enterprise_id))
             else:
-                # 非 mock: 基于真实数据评分
+                # Real adapters must not turn an uncollected patent count into zero
+                # or manufacture a recommendation score from incomplete fields.
                 profile = asyncio.run(self.get_profile(enterprise_id))
-                score = min(95, 70 + (profile.patents_count or 0) // 5)
-                result = {"score": score, "level": "STRONG_RECOMMEND" if score >= 85 else "RECOMMEND",
-                          "reasons": ["数据驱动评分"]}
+                result = {
+                    "score": profile.score,
+                    "level": "DATA_INSUFFICIENT",
+                    "reasons": [
+                        "当前快照缺少权威经营、融资和知识产权完整数据，未生成投资评分"
+                    ],
+                }
         except Exception as e:
             logger.error(f"compute_scoring_sync 失败: {e}")
             return self._error_result("investment_scoring", str(e))
@@ -143,9 +148,27 @@ class EnterpriseDataTool:
             )
 
     async def search_enterprises(
-        self, query: str, industry: str = None, location: str = None, limit: int = 20
+        self,
+        query: str,
+        industry: str = None,
+        location: str = None,
+        limit: int = 20,
+        min_capital: float | None = None,
+        max_capital: float | None = None,
+        sort_by: str = "relevance",
     ) -> EnterpriseSearchResult:
         try:
+            advanced = getattr(self.adapter, "search_enterprises_advanced", None)
+            if callable(advanced):
+                return await advanced(
+                    query=query,
+                    industry=industry,
+                    location=location,
+                    min_capital=min_capital,
+                    max_capital=max_capital,
+                    sort_by=sort_by,
+                    limit=limit,
+                )
             return await self.adapter.search_enterprises(query, industry, location, limit)
         except Exception as e:
             logger.error(f"search_enterprises 异常: {e}")
@@ -176,6 +199,43 @@ class EnterpriseDataTool:
             return await self.adapter.health_check()
         except Exception:
             return False
+
+    def stats(self) -> dict:
+        """Return adapter statistics when the selected data source exposes them."""
+        getter = getattr(self.adapter, "stats", None)
+        if not callable(getter):
+            return {"data_available": False, "source_name": self.source_name}
+        try:
+            return getter()
+        except Exception as exc:
+            logger.error("enterprise adapter stats failed: %s", exc)
+            return {
+                "data_available": False,
+                "source_name": self.source_name,
+                "error": str(exc),
+            }
+
+    def risk_overview(self, limit: int = 50) -> dict:
+        """Return a source-backed risk aggregate when the adapter supports it."""
+        getter = getattr(self.adapter, "risk_overview", None)
+        if not callable(getter):
+            return {
+                "evaluated_enterprises": 0,
+                "distribution": {"high": 0, "medium": 0, "low": 0},
+                "enterprises": [],
+                "source": None,
+            }
+        try:
+            return getter(limit=limit)
+        except Exception as exc:
+            logger.error("enterprise risk overview failed: %s", exc)
+            return {
+                "evaluated_enterprises": 0,
+                "distribution": {"high": 0, "medium": 0, "low": 0},
+                "enterprises": [],
+                "source": None,
+                "error": str(exc),
+            }
 
     # ═══ 辅助 ═══
 

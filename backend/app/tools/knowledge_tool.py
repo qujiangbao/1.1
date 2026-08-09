@@ -5,6 +5,8 @@ PolicyAgent 通过 ToolGateway.invoke() → KnowledgeTool → PolicyRetriever �
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import logging
 
 logger = logging.getLogger(__name__)
@@ -15,6 +17,14 @@ class KnowledgeTool:
 
     def __init__(self):
         self._retriever = None
+        self._event_loop: asyncio.AbstractEventLoop | None = None
+
+    def bind_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Bind sync ToolGateway calls to the application's async I/O loop."""
+        self._event_loop = loop
+
+    def unbind_event_loop(self) -> None:
+        self._event_loop = None
 
     @property
     def retriever(self):
@@ -25,28 +35,42 @@ class KnowledgeTool:
 
     # ═══ ToolGateway 兼容的同步方法 ═══
 
-    def policy_hybrid_search_sync(self, params: dict) -> dict:
-        """混合检索 — ToolGateway 调用入口"""
-        import asyncio
-
+    async def policy_hybrid_search(self, params: dict) -> dict:
+        """异步混合检索 — FastAPI 与异步调用方的主入口"""
         query = str(params.get("query", ""))
         top_k = int(params.get("top_k", 10))
         filters = params.get("filters") if params.get("filters") else None
 
         try:
-            result = asyncio.run(self.retriever.hybrid_search(
+            result = await self.retriever.hybrid_search(
                 query=query, top_k=top_k, filters=filters,
-            ))
-        except RuntimeError:
-            loop = asyncio.get_event_loop()
-            result = loop.run_until_complete(
-                self.retriever.hybrid_search(query=query, top_k=top_k, filters=filters)
             )
         except Exception as e:
             logger.error(f"KnowledgeTool search failed: {e}")
             return self._error_result("policy_hybrid_search", str(e))
 
         chunks = result.get("chunks", [])
+        # Park-owned material is searched locally and merged with the public
+        # policy source. This keeps private documents usable even when the
+        # deployment cannot afford a second vector service.
+        try:
+            from app.services.park_document_service import search_park_documents
+            # PolicyAgent must not treat an enterprise due-diligence report as
+            # a policy merely because both texts contain generic terms such as
+            # "广州" or "企业".
+            private_chunks = search_park_documents(
+                query,
+                max(3, top_k // 2),
+                purpose="policy",
+            )
+        except Exception:
+            logger.exception("Park document search failed")
+            private_chunks = []
+        chunks = sorted(
+            [*chunks, *private_chunks],
+            key=lambda item: float(item.get("score") or item.get("match_score", 0) / 100),
+            reverse=True,
+        )[:top_k]
         return {
             "status": "success",
             "tool": "policy_hybrid_search",
@@ -54,9 +78,44 @@ class KnowledgeTool:
             "result": {
                 "chunks": chunks,
                 "total": result.get("total", len(chunks)),
-                "mode": result.get("mode", "mock"),
+                "mode": (
+                    f"{result.get('mode', 'mock')}+park_documents"
+                    if private_chunks else result.get("mode", "mock")
+                ),
             },
         }
+
+    def policy_hybrid_search_sync(self, params: dict) -> dict:
+        """同步兼容入口，供 ToolGateway 的同步节点调用。"""
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        # LangGraph executes synchronous nodes in worker threads. Schedule
+        # database I/O back onto the FastAPI loop that owns the asyncpg pool.
+        bound_loop = self._event_loop
+        if bound_loop is not None and bound_loop.is_running():
+            if current_loop is bound_loop:
+                raise RuntimeError(
+                    "Use policy_hybrid_search() from the application event loop"
+                )
+            future = asyncio.run_coroutine_threadsafe(
+                self.policy_hybrid_search(params),
+                bound_loop,
+            )
+            return future.result()
+
+        if current_loop is None:
+            return asyncio.run(self.policy_hybrid_search(params))
+
+        # A synchronous graph node may be called from an active event loop.
+        # Execute the coroutine in an isolated thread instead of nesting loops.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(
+                asyncio.run,
+                self.policy_hybrid_search(params),
+            ).result()
 
     def policy_keyword_search_sync(self, params: dict) -> dict:
         """关键词检索 — 委托给 hybrid_search"""

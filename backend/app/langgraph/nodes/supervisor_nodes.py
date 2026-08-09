@@ -7,6 +7,7 @@ from app.langgraph.state import SupervisorState, TaskNode, TraceStep, AgentResul
 from app.agents.registry import AGENT_REGISTRY
 from app.core.llm_gateway import get_llm_gateway
 from app.agents.executor import execute_business_agent
+from app.services.runtime_metrics import get_runtime_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,52 @@ INTENT_ROUTING = {
     "ai_insight":            "BIAgent",
 }
 
+KEYWORD_INTENT_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "industry_analysis",
+        (
+            "产业", "产业链", "行业分析", "行业趋势", "市场规模", "市场趋势",
+            "市场分析", "竞争格局", "上游", "中游", "下游", "集群", "赛道",
+        ),
+    ),
+    (
+        "investment_search",
+        (
+            "招商", "寻商", "引进企业", "目标企业", "候选企业", "企业画像",
+            "企业评分", "落地意愿", "投资推荐", "投资机会", "选址",
+        ),
+    ),
+    (
+        "risk_single",
+        (
+            "风险", "预警", "合规", "诉讼", "失信", "处罚", "经营异常",
+            "舆情", "客户集中", "供应链风险", "现金流",
+        ),
+    ),
+    (
+        "policy_match",
+        (
+            "政策", "补贴", "申报", "扶持", "奖励", "资助", "税收优惠",
+            "惠企", "申报资格", "申报条件",
+        ),
+    ),
+    (
+        "dashboard_kpi",
+        (
+            "经营指标", "运营指标", "招商漏斗", "经营分析", "经营看板",
+            "驾驶舱", "kpi", "报表", "统计汇总", "数据汇总", "趋势图",
+        ),
+    ),
+    (
+        "service_request",
+        (
+            "企业服务", "服务工单", "工单", "诉求", "报修", "投诉", "物业",
+            "空调", "水电", "停车", "会议室", "搬迁", "临时增容", "入驻手续",
+            "场地服务", "人才招聘",
+        ),
+    ),
+)
+
 
 def _add_trace(state: SupervisorState, type_: str, agent: str, action: str,
                input_: dict, output_: dict, duration_ms: int):
@@ -180,8 +227,18 @@ def intent_recognition_node(state: SupervisorState) -> SupervisorState:
         logger.warning(f"LLM intent recognition failed: {e}, using keyword fallback")
         parsed = _keyword_intent_fallback(query)
 
-    state["intent"] = parsed.get("intent", "investment_search")
-    state["intents"] = parsed.get("intents", [state["intent"]])
+    raw_intents = parsed.get("intents") or [parsed.get("intent")]
+    if isinstance(raw_intents, str):
+        raw_intents = [raw_intents]
+    valid_intents = list(dict.fromkeys(
+        intent for intent in raw_intents if intent in INTENT_ROUTING
+    ))
+    if not valid_intents:
+        parsed = _keyword_intent_fallback(query)
+        valid_intents = parsed["intents"]
+
+    state["intent"] = valid_intents[0] if valid_intents else "general_query"
+    state["intents"] = valid_intents
     state["entities"] = parsed.get("entities", {})
     state["confidence"] = parsed.get("confidence", 0.8)
 
@@ -193,24 +250,17 @@ def intent_recognition_node(state: SupervisorState) -> SupervisorState:
 def _keyword_intent_fallback(query: str) -> dict:
     """LLM 失败时的关键词兜底"""
     q = query.lower()
-    intents = []
-    if any(w in q for w in ["产业", "产业链", "趋势", "市场"]):
-        intents.append("industry_analysis")
-    if any(w in q for w in ["招商", "企业", "投资", "推荐"]):
-        intents.append("investment_search")
-    if any(w in q for w in ["风险", "预警"]):
-        intents.append("risk_single")
-    if any(w in q for w in ["政策", "补贴", "申报"]):
-        intents.append("policy_match")
-    if any(w in q for w in ["驾驶舱", "指标", "kpi", "汇总"]):
-        intents.append("dashboard_kpi")
-    if any(w in q for w in ["服务", "工单", "诉求"]):
-        intents.append("service_request")
-    if not intents:
-        intents = ["investment_search"]
+    intents = [
+        intent
+        for intent, keywords in KEYWORD_INTENT_RULES
+        if any(keyword in q for keyword in keywords)
+    ]
     return {
-        "intent": intents[0], "intents": intents, "entities": {},
-        "is_compound": len(intents) > 1, "confidence": 0.6,
+        "intent": intents[0] if intents else "general_query",
+        "intents": intents,
+        "entities": {},
+        "is_compound": len(intents) > 1,
+        "confidence": 0.6 if intents else 0.2,
     }
 
 
@@ -236,7 +286,14 @@ def task_planner_node(state: SupervisorState) -> SupervisorState:
             "task_id": f"{state['trace_id']}-{i}",
             "agent": agent,
             "intent": intent,
-            "input": {"query": state["user_query"], "intent": intent, **state.get("entities", {})},
+            "input": {
+                "query": state["user_query"],
+                "intent": intent,
+                "data_mode": state.get("data_mode", "real"),
+                "current_date": state.get("current_date", ""),
+                "data_context": state.get("data_context", {}),
+                **state.get("entities", {}),
+            },
             "expected_output": AGENT_REGISTRY.get(agent, {}).get("capabilities", [])[:3],
             "dependencies": [],
             "priority": "high" if i == 0 else "medium",
@@ -269,6 +326,8 @@ def agent_router_node(state: SupervisorState) -> SupervisorState:
     task["status"] = "running"
     agent = task["agent"]
     display = AGENT_REGISTRY.get(agent, {}).get("display", agent)
+    runtime_metrics = get_runtime_metrics()
+    metric_started = runtime_metrics.begin(agent, task["task_id"])
 
     try:
         result: AgentResult = execute_business_agent(agent, task, state)
@@ -281,6 +340,13 @@ def agent_router_node(state: SupervisorState) -> SupervisorState:
             "trace": {"tools_used": [], "data_sources": []},
             "execution_time_ms": 0,
         }
+    runtime_metrics.finish(
+        agent,
+        task["task_id"],
+        result["status"],
+        metric_started,
+        result.get("execution_time_ms", 0),
+    )
 
     state["agent_results"][agent] = result
     task["status"] = "completed" if result["status"] == "success" else "failed"
@@ -304,6 +370,22 @@ def result_validator_node(state: SupervisorState) -> SupervisorState:
 # ==================== Node 6: Result Aggregator ====================
 def result_aggregator_node(state: SupervisorState) -> SupervisorState:
     results = state.get("agent_results", {})
+    data_mode = state.get("data_mode", "real")
+    current_date = state.get("current_date", "")
+    mode_notice = (
+        f"> **演示沙盘 · 非真实经营数据** | 生成日期：{current_date}"
+        if data_mode == "demo"
+        else f"> **公开数据快照** | 生成日期：{current_date} | 无证据字段标记为“待接入/尚未评估”"
+    )
+    if not results:
+        state["aggregated_result"] = ""
+        state["final_response"] = (
+            f"{mode_notice}\n\n# 暂未识别到可执行任务\n\n"
+            "请明确说明需要产业分析、招商寻商、风险核验、政策匹配、"
+            "经营指标查询或企业服务咨询中的哪一类事项。"
+        )
+        return state
+
     parts = []
     for agent, result in results.items():
         display = AGENT_REGISTRY.get(agent, {}).get("display", agent)
@@ -314,15 +396,73 @@ def result_aggregator_node(state: SupervisorState) -> SupervisorState:
 
     state["aggregated_result"] = "\n\n".join(parts)
 
-    # 使用 LLM 生成自然语言报告
-    try:
-        llm = get_llm_gateway()
-        prompt = f"你是产业园AI运营总经理。根据以下Agent执行结果，用中文生成面向用户的综合报告：\n\n{state['aggregated_result']}"
-        resp = llm.invoke_sync("Supervisor", "simple", prompt, max_tokens=500, temperature=0.3)
-        state["final_response"] = resp.content
-    except Exception as e:
-        logger.warning(f"LLM aggregation failed: {e}")
-        state["final_response"] = f"# 处理结果\n\n{state['aggregated_result']}\n\n---\n*Trace ID: {state.get('trace_id', '')}*"
+    # A single PolicyAgent result is already structured and traceable. Avoid a
+    # second external LLM call that can delay or paraphrase away citations.
+    if len(results) == 1 and "PolicyAgent" in results:
+        policy_summary = (
+            results["PolicyAgent"].get("result", {}).get("summary", "")
+        )
+        state["final_response"] = (
+            f"{mode_notice}\n\n# 政策匹配结果\n\n{policy_summary}"
+        )
+    else:
+        # 使用 LLM 生成多 Agent 自然语言报告
+        try:
+            llm = get_llm_gateway()
+            prompt = f"""你是产业园AI运营总经理。根据以下 Agent 执行结果，用中文生成面向用户的综合报告。
+
+当前日期：{current_date}
+当前数据模式：{"演示沙盘（固定合成场景）" if data_mode == "demo" else "公开数据快照"}
+
+硬性规则：
+1. 只能使用下方 Agent 结果中明确出现的数字、企业名称、风险等级和结论。
+2. 禁止补写、推测或美化任何评分、企业数量、融资、扩产、签约和市场规模。
+3. 证据不足时必须写“待接入”“尚未评估”或“证据不足”，不能写 0 分、UNKNOWN 后继续下结论。
+4. 日期必须使用 {current_date}，不得生成其他报告日期。
+5. 演示模式中的指标必须称为“演示数据/示例企业”；公开快照模式不得把演示数据写成真实数据。
+6. 末尾用一行说明“数据口径与可信度”。
+
+Agent 执行结果：
+
+{state['aggregated_result']}"""
+            resp = llm.invoke_sync("Supervisor", "simple", prompt, max_tokens=500, temperature=0.3)
+            state["final_response"] = f"{mode_notice}\n\n{resp.content}"
+        except Exception as e:
+            logger.warning(f"LLM aggregation failed: {e}")
+            state["final_response"] = (
+                f"{mode_notice}\n\n# 处理结果\n\n{state['aggregated_result']}"
+                f"\n\n---\n*Trace ID: {state.get('trace_id', '')}*"
+            )
+
+    # The natural-language aggregation step must not drop authoritative policy
+    # citations. Always provide a deterministic source appendix.
+    policy_data = (
+        results.get("PolicyAgent", {})
+        .get("result", {})
+        .get("data", {})
+    )
+    missing_sources = []
+    seen_urls = set()
+    policy_candidates = policy_data.get("policies", [])
+    for policy in policy_candidates[:3]:
+        source_url = str(policy.get("source_url", "")).strip()
+        if (
+            not source_url
+            or source_url in seen_urls
+        ):
+            continue
+        seen_urls.add(source_url)
+        title = " ".join(str(policy.get("title", "")).split()) or "政策原文"
+        missing_sources.append(f"- {title}：{source_url}")
+    if missing_sources:
+        state["final_response"] += (
+            "\n\n## 政策来源\n" + "\n".join(missing_sources)
+        )
+        if len(policy_candidates) > 3:
+            state["final_response"] += (
+                f"\n\n其余 {len(policy_candidates) - 3} 条候选政策不在工作台展开；"
+                "请进入“惠企政策库”查看完整政策库并重新筛选。"
+            )
 
     _add_trace(state, "supervisor_decision", "Supervisor", "result_aggregation",
                {"agent_count": len(results)}, {"response_length": len(state["final_response"])}, 5)

@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "key": "gz_fgw",
+      "name": "广州市发展和改革委员会规范性文件",
+      "list_url": "https://www.gz.gov.cn/gfxwj/sbmgfxwj/gzsfzhggwyh/",
+      "detail_url_regex": "https?://www\\.gz\\.gov\\.cn/gfxwj/sbmgfxwj/gzsfzhggwyh/content/(?:m?post)_\\d+\\.html",
+      "level": "municipal",
+      "region": "广州市",
+      "enabled": true
+    },
+    {
+      "key": "gz_gxj",
+      "name": "广州市工业和信息化局政策原文",
+      "list_url": "https://gxj.gz.gov.cn/yw/zchb/zcwj/index.html",
+      "detail_url_regex": "https?://gxj\\.gz\\.gov\\.cn/yw/zchb/zcwj/(?:cyzc|yshjzc)/content/(?:m?post)_\\d+\\.html",
+      "level": "municipal",
+      "region": "广州市",
+      "enabled": true
+    },
+    {
+      "key": "gz_kjj",
+      "name": "广州市科学技术局政策法规文件",
+      "list_url": "https://kjj.gz.gov.cn/xxgk/zcfg/zcfgwj/",
+      "detail_url_regex": "https?://kjj\\.gz\\.gov\\.cn/xxgk/zcfg/zcfgwj/content/(?:m?post)_\\d+\\.html",
+      "level": "municipal",
+      "region": "广州市",
+      "enabled": true
+    },
+    {
+      "key": "gz_swj",
+      "name": "广州市商务局扶持政策",
+      "list_url": "https://sw.gz.gov.cn/xxgk/zcfg/fczc/",
+      "detail_url_regex": "https?://sw\\.gz\\.gov\\.cn/xxgk/zcfg/fczc/content/(?:m?post)_\\d+\\.html",
+      "level": "municipal",
+      "region": "广州市",
+      "enabled": true
+    },
+    {
+      "key": "hp_department",
+      "name": "黄埔区广州开发区区部门规范性文件",
+      "list_url": "https://www.gz.gov.cn/gfxwj/qjgfxwj/hpq/qbm/",
+      "detail_url_regex": "https?://www\\.gz\\.gov\\.cn/gfxwj/qjgfxwj/hpq/qbm/content/(?:m?post)_\\d+\\.html",
+      "level": "district",
+      "region": "广州市黄埔区",
+      "title_keywords": ["产业", "工业", "企业", "投资", "招商", "科技", "创新", "制造", "数字", "人工智能", "智能", "机器人", "新能源", "新材料", "集成电路", "生物医药", "经济", "金融", "人才", "知识产权", "用地", "园区", "低空", "航空", "商贸", "外贸", "服务业", "创业", "孵化", "营商", "项目引进", "绿色低碳"],
+      "enabled": true
+    },
+    {
+      "key": "hp_government",
+      "name": "黄埔区政府广州开发区管委会规范性文件",
+      "list_url": "https://www.gz.gov.cn/gfxwj/qjgfxwj/hpq/qf/",
+      "detail_url_regex": "https?://www\\.gz\\.gov\\.cn/gfxwj/qjgfxwj/hpq/qf/content/(?:m?post)_\\d+\\.html",
+      "level": "district",
+      "region": "广州市黄埔区",
+      "title_keywords": ["产业", "工业", "企业", "投资", "招商", "科技", "创新", "制造", "数字", "人工智能", "智能", "机器人", "新能源", "新材料", "集成电路", "生物医药", "经济", "金融", "人才", "知识产权", "用地", "园区", "低空", "航空", "商贸", "外贸", "服务业", "创业", "孵化", "营商", "项目引进", "绿色低碳"],
+      "enabled": true
+    }
+  ]
+}

@@ -1,138 +1,183 @@
-#!/bin/bash
-# ═══════════════════════════════════════════════════════
-# Industrial Park Agent v1.2 — E2E Test Script (P8 fixed)
-# ═══════════════════════════════════════════════════════
-set -euo pipefail
+#!/usr/bin/env bash
+# Industrial Park Agent v1.3 — HTTP/JSON E2E checks
+set -uo pipefail
 
 BASE="${1:-http://localhost:8000}"
 API="$BASE/api/v1"
 PASS=0
 FAIL=0
-VERSION="unknown"
+HTTP_STATUS=""
+HTTP_BODY=""
 
-check() {
-  local name="$1" expected="$2" actual="$3"
-  if echo "$actual" | grep -q "$expected"; then
-    echo "  ✅ $name"
-    PASS=$((PASS + 1))
-  else
-    echo "  ❌ $name (expected: '$expected')"
-    FAIL=$((FAIL + 1))
+request() {
+  local response
+  response=$(curl --noproxy '*' -sS -w $'\n%{http_code}' "$@" 2>&1)
+  local curl_status=$?
+  if [ "$curl_status" -ne 0 ]; then
+    HTTP_STATUS="000"
+    HTTP_BODY="$response"
+    return
   fi
+  HTTP_STATUS="${response##*$'\n'}"
+  HTTP_BODY="${response%$'\n'*}"
+}
+
+pass() {
+  echo "  ✓ $1"
+  PASS=$((PASS + 1))
 }
 
 fail() {
-  echo "  ❌ $1"
+  echo "  ✗ $1"
   FAIL=$((FAIL + 1))
 }
 
-echo "=== Industrial Park Agent v1.2 — E2E Test ==="
+check_status() {
+  local name="$1" expected="$2"
+  if [ "$HTTP_STATUS" = "$expected" ]; then
+    pass "$name"
+  else
+    fail "$name (expected HTTP $expected, got $HTTP_STATUS)"
+  fi
+}
+
+check_status_one_of() {
+  local name="$1"
+  shift
+  local expected
+  for expected in "$@"; do
+    if [ "$HTTP_STATUS" = "$expected" ]; then
+      pass "$name"
+      return
+    fi
+  done
+  fail "$name (unexpected HTTP $HTTP_STATUS)"
+}
+
+check_json() {
+  local name="$1" expression="$2"
+  if printf '%s' "$HTTP_BODY" | python3 -c \
+    "import json,sys; data=json.load(sys.stdin); assert ($expression)" 2>/dev/null; then
+    pass "$name"
+  else
+    fail "$name (invalid JSON or assertion failed)"
+  fi
+}
+
+echo "=== Industrial Park Agent v1.3 E2E ==="
 echo "  base: $BASE"
 echo "  time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "  git:  $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-echo ""
+echo
 
-# ── 1. Liveness + Readiness ──
 echo "1. Health Checks"
-LIVE=$(curl -sf "$API/health/live" 2>&1 || echo "FAIL")
-check "liveness" "alive" "$LIVE"
+request "$API/health/live"
+check_status "liveness status" "200"
+check_json "liveness body" "data.get('status') == 'alive'"
 
-READY=$(curl -sf "$API/health/ready" 2>&1 || echo "FAIL")
-check "readiness (DB disabled OK)" "not_ready|ready" "$READY"
+request "$API/health/ready"
+check_status_one_of "readiness returns a defined state" "200" "503"
+check_json "readiness body" "data.get('status') in ('ready', 'not_ready')"
 
-FULL=$(curl -sf "$API/health" 2>&1 || echo "FAIL")
-check "health degraded/mock" "degraded|healthy|mock" "$FULL"
+request "$API/health"
+check_status "health status" "200"
+check_json "health body" "data.get('status') in ('healthy', 'degraded')"
 
-# ── 2. Auth ──
 echo "2. Authentication"
-LOGIN_RESP=$(curl -sf -X POST "$API/auth/login" \
+request -X POST "$API/auth/login" \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin"}' 2>&1 || echo "FAIL")
-TOKEN=$(echo "$LOGIN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || echo "")
-check "login 200" "access_token" "$LOGIN_RESP"
+  -d '{"username":"admin","password":"admin"}'
+check_status "login status" "200"
+check_json "login token field" "isinstance(data.get('access_token'), str) and len(data['access_token']) >= 20"
+TOKEN=$(printf '%s' "$HTTP_BODY" | python3 -c \
+  "import json,sys; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
 
-if [ -z "$TOKEN" ]; then
-  fail "token missing from login response"
-else
-  AUTH_HEADER="Authorization: Bearer $TOKEN"
-  check "token length >= 20" "." "$([ ${#TOKEN} -ge 20 ] && echo ok || echo fail)"
-
-  # /auth/me
-  ME=$(curl -sf "$API/auth/me" -H "$AUTH_HEADER" 2>&1 || echo "FAIL")
-  check "auth/me" "user_id" "$ME"
-
-  # Wrong password
-  WRONG=$(curl -s -X POST "$API/auth/login" -H "Content-Type: application/json" \
-    -d '{"username":"admin","password":"wrong"}' 2>&1 || echo "{}")
-  check "wrong password 401" "401|Unauthorized|Incorrect" "$WRONG"
-fi
-
-# ── 3. Agent Tasks ──
-echo "3. Agent Tasks"
+AUTH_ARGS=()
 if [ -n "$TOKEN" ]; then
-  SINGLE_RESP=$(curl -sf -X POST "$API/agent/chat" \
-    -H "Content-Type: application/json" -H "$AUTH_HEADER" \
-    -d '{"message":"分析广州数控风险"}' --max-time 120 2>&1 || echo "FAIL")
-  SINGLE_TASK=$(echo "$SINGLE_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('task_id',''))" 2>/dev/null || echo "")
-  check "single agent chat" "task_id" "$SINGLE_RESP"
-
-  # Compound task
-  COMPOUND_RESP=$(curl -sf -X POST "$API/agent/chat" \
-    -H "Content-Type: application/json" -H "$AUTH_HEADER" \
-    -d '{"message":"分析机器人产业链，推荐招商企业，评估风险并匹配政策"}' --max-time 180 2>&1 || echo "FAIL")
-  COMPOUND_TASK=$(echo "$COMPOUND_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('task_id',''))" 2>/dev/null || echo "")
-  check "compound agent chat" "agents_used" "$COMPOUND_RESP"
+  AUTH_ARGS=(-H "Authorization: Bearer $TOKEN")
+  request "$API/auth/me" "${AUTH_ARGS[@]}"
+  check_status "auth/me status" "200"
+  check_json "auth/me body" "'user_id' in data"
 else
-  echo "  ⚠️  Skipping agent tasks (no token)"
+  fail "token missing from login response"
 fi
 
-# ── 4. API Endpoints ──
+request -X POST "$API/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"wrong"}'
+check_status "wrong password status" "401"
+
+echo "3. Agent Tasks"
+COMPOUND_TASK=""
+if [ -n "$TOKEN" ]; then
+  request -X POST "$API/agent/chat" \
+    -H "Content-Type: application/json" "${AUTH_ARGS[@]}" \
+    -d '{"message":"分析机器人产业链，推荐招商企业，评估风险并匹配政策"}' \
+    --max-time 180
+  check_status "compound agent chat status" "200"
+  check_json "compound agent chat body" \
+    "isinstance(data.get('task_id'), str) and len(data.get('agents_used', [])) >= 4"
+  COMPOUND_TASK=$(printf '%s' "$HTTP_BODY" | python3 -c \
+    "import json,sys; print(json.load(sys.stdin).get('task_id',''))" 2>/dev/null)
+else
+  fail "compound agent chat skipped because login failed"
+fi
+
 echo "4. API Endpoints"
-R=$(curl -sf "$API/agent/status" ${TOKEN:+-H "$AUTH_HEADER"} 2>&1 || echo "FAIL")
-check "agent/status" "total_agents" "$R"
+request "$API/agent/status" "${AUTH_ARGS[@]}"
+check_status "agent/status status" "200"
+check_json "agent/status body" "data.get('total_agents', 0) >= 6"
 
-R=$(curl -sf "$API/agent/team/status" ${TOKEN:+-H "$AUTH_HEADER"} 2>&1 || echo "FAIL")
-check "agent/team/status" "total_agents" "$R"
+request "$API/agent/team/status" "${AUTH_ARGS[@]}"
+check_status "agent/team/status status" "200"
+check_json "agent/team/status body" "data.get('data', {}).get('total_agents', 0) >= 6"
 
-R=$(curl -sf "$API/agent/daily-report" ${TOKEN:+-H "$AUTH_HEADER"} 2>&1 || echo "FAIL")
-check "agent/daily-report" "data_mode" "$R"
+request "$API/agent/daily-report" "${AUTH_ARGS[@]}"
+check_status "agent/daily-report status" "200"
+check_json "agent/daily-report body" "'data_mode' in data.get('data', {})"
 
-INVEST_RESP=$(curl -sf -X POST "$API/investment/search" \
-  -H "Content-Type: application/json" ${TOKEN:+-H "$AUTH_HEADER"} \
-  -d '{"industry":"机器人"}' 2>&1 || echo "FAIL")
-check "investment/search" "enterprises" "$INVEST_RESP"
+request -X POST "$API/investment/search" \
+  -H "Content-Type: application/json" "${AUTH_ARGS[@]}" \
+  -d '{"industry":"机器人"}'
+check_status "investment/search status" "200"
+check_json "investment/search body" \
+  "len(data.get('data', {}).get('enterprises', [])) >= 1 and data['data']['total'] == len(data['data']['enterprises'])"
 
-PROFILE=$(curl -sf "$API/investment/profile/ENT-001" ${TOKEN:+-H "$AUTH_HEADER"} 2>&1 || echo "FAIL")
-check "investment/profile" "success" "$PROFILE"
+request -X POST "$API/policy/search" \
+  -H "Content-Type: application/json" "${AUTH_ARGS[@]}" \
+  -d '{"query":"机器人产业扶持","top_k":3}'
+check_status "policy/search status" "200"
+check_json "policy/search source evidence" \
+  "data.get('data', {}).get('chunks') and all(item.get('metadata', {}).get('source_url', '').startswith('https://www.gz.gov.cn/') for item in data['data']['chunks'])"
 
-# ── 5. Trace ──
+request "$API/investment/profile/ENT-001" "${AUTH_ARGS[@]}"
+check_status "investment/profile status" "200"
+check_json "investment/profile body" "data.get('success') is True"
+
 echo "5. Trace"
-if [ -n "${COMPOUND_TASK:-}" ] && [ ${#COMPOUND_TASK} -gt 5 ]; then
-  TRACE=$(curl -sf "$API/agent/task/$COMPOUND_TASK/trace" ${TOKEN:+-H "$AUTH_HEADER"} 2>&1 || echo "FAIL")
-  check "trace 200" "nodes" "$TRACE"
-
-  # Verify at least 4 agent nodes in compound task
-  AGENT_COUNT=$(echo "$TRACE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len([n for n in d.get('nodes',[]) if n.get('type')=='agent']))" 2>/dev/null || echo "0")
-  echo "     Agent nodes in trace: $AGENT_COUNT"
+if [ -n "$COMPOUND_TASK" ]; then
+  request "$API/agent/task/$COMPOUND_TASK/trace" "${AUTH_ARGS[@]}"
+  check_status "trace status" "200"
+  check_json "trace body" "len(data.get('nodes', [])) >= 5"
+else
+  fail "trace skipped because compound task was not created"
 fi
 
-# Non-existent task → 404
-NOTFOUND=$(curl -s "$API/agent/task/nonexistent-12345/trace" ${TOKEN:+-H "$AUTH_HEADER"} 2>&1 || echo "{}")
-check "missing task → not 200" "404|detail" "$NOTFOUND"
+request "$API/agent/task/nonexistent-12345/trace" "${AUTH_ARGS[@]}"
+check_status "missing trace status" "404"
+check_json "missing trace body" "data.get('detail') == 'Task not found or trace not yet generated'"
 
-# ── 6. Summary ──
-echo ""
-echo "=== P8 E2E Summary ==="
+echo
+echo "=== E2E Summary ==="
 echo "  Passed: $PASS"
 echo "  Failed: $FAIL"
 echo "  Total:  $((PASS + FAIL))"
 echo "  Branch: $(git branch --show-current 2>/dev/null || echo unknown)"
 echo "  Commit: $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-echo ""
 
-if [ $FAIL -eq 0 ]; then
-  echo "✅ All E2E tests passed!"
+if [ "$FAIL" -eq 0 ]; then
+  echo "✓ All E2E tests passed"
 else
-  echo "❌ $FAIL test(s) failed"
+  echo "✗ $FAIL test(s) failed"
 fi
-exit $FAIL
+exit "$FAIL"

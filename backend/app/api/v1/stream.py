@@ -6,15 +6,16 @@ GET /agent/stream/{task_id}/snapshot — 当前任务状态快照"""
 import asyncio
 import json
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from app.core.security import verify_stream_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 @router.get("/agent/stream/{task_id}")
-async def agent_stream(task_id: str):
+async def agent_stream(task_id: str, token: str = Query(..., min_length=1)):
     """SSE 端点 — 订阅 Agent 执行实时事件流
 
     行为:
@@ -29,6 +30,8 @@ async def agent_stream(task_id: str):
     settings = get_settings()
     if not settings.streaming_enabled:
         raise HTTPException(status_code=404, detail="Streaming is disabled")
+    if not verify_stream_token(token, task_id):
+        raise HTTPException(status_code=401, detail="Invalid or expired stream token")
 
     from app.services.event_bus import get_event_bus
     from app.services.event_normalizer import EventNormalizer
@@ -73,8 +76,10 @@ async def agent_stream(task_id: str):
 
 
 @router.get("/agent/stream/{task_id}/snapshot")
-async def agent_stream_snapshot(task_id: str):
+async def agent_stream_snapshot(task_id: str, token: str = Query(..., min_length=1)):
     """获取当前任务状态快照 (用于初始加载或轮询降级)"""
+    if not verify_stream_token(token, task_id):
+        raise HTTPException(status_code=401, detail="Invalid or expired stream token")
     snapshot = await _build_snapshot(task_id)
     if snapshot is None:
         return {"task_id": task_id, "status": "not_found"}
@@ -91,7 +96,7 @@ async def _build_snapshot(task_id: str) -> dict | None:
     try:
         from app.langgraph.graph import get_supervisor_graph
         graph = await get_supervisor_graph()
-        state = graph.get_state({"configurable": {"thread_id": task_id}})
+        state = await graph.aget_state({"configurable": {"thread_id": task_id}})
         if state is None or not state.values:
             return None
 

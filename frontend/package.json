@@ -18,6 +18,7 @@
     "react-dom": "^19",
     "react-markdown": "^9",
     "reactflow": "^11",
+    "remark-gfm": "^4.0.1",
     "typescript": "^5",
     "zustand": "^5"
   },

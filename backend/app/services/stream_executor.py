@@ -70,6 +70,9 @@ async def execute_graph_with_events(
                 "status": result.get("status", "completed"),
                 "result": {"response": response_text, "agents_used": agents_used},
             })
+            await db_tool.save_graph_executions(
+                task_id, result.get("agent_results", {})
+            )
         except Exception as e:
             logger.warning("[StreamExecutor] save_agent_task failed: %s", e)
 

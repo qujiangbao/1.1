@@ -1,134 +1,407 @@
 "use client";
 
-import { useState } from "react";
-import type { KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button, Card, Statistic, Row, Col, Table, Tag, Progress } from "antd";
 import {
-  AlertOutlined, WarningOutlined, RiseOutlined, FallOutlined,
-  CheckCircleOutlined, ExclamationCircleOutlined, RobotOutlined,
+  Alert,
+  Button,
+  Card,
+  Col,
+  Empty,
+  Progress,
+  Row,
+  Space,
+  Spin,
+  Statistic,
+  Table,
+  Tag,
+  Tooltip,
+} from "antd";
+import type { ColumnsType } from "antd/es/table";
+import {
+  AlertOutlined,
+  CheckCircleOutlined,
+  ExclamationCircleOutlined,
+  RobotOutlined,
+  WarningOutlined,
 } from "@ant-design/icons";
 import PageHeader from "@/components/layout/PageHeader";
+import { apiJson } from "@/api/fetch";
+import { useDataMode } from "@/contexts/DataModeContext";
 
-const riskEnterprises = [
-  { key: "1", enterprise_id: "risk-001", name: "某智能装备公司", score: 78, level: "HIGH", reason: "融资6个月未更新，疑似资金链紧张", trend: "up", action: "建议本周走访" },
-  { key: "2", enterprise_id: "risk-002", name: "某机器人科技", score: 65, level: "MEDIUM", reason: "招聘量下降20%，核心人员流动", trend: "up", action: "关注人员变动" },
-  { key: "3", enterprise_id: "risk-003", name: "某新能源材料", score: 62, level: "MEDIUM", reason: "供应商变更频繁，供应链风险", trend: "stable", action: "排查供应链" },
-  { key: "4", enterprise_id: "risk-004", name: "某电子制造", score: 55, level: "MEDIUM", reason: "工商变更频繁，股权结构变动", trend: "up", action: "了解变更原因" },
-  { key: "5", enterprise_id: "risk-005", name: "某AI科技", score: 48, level: "MEDIUM", reason: "银行贷款逾期30天", trend: "up", action: "评估偿债能力" },
-  { key: "6", enterprise_id: "risk-006", name: "某芯片设计", score: 35, level: "LOW", reason: "季度营收同比下降15%", trend: "down", action: "正常关注" },
-  { key: "7", enterprise_id: "risk-007", name: "某医疗器械", score: 32, level: "LOW", reason: "专利纠纷未解决", trend: "stable", action: "持续观察" },
-  { key: "8", enterprise_id: "risk-008", name: "某数据服务", score: 28, level: "LOW", reason: "客户集中度偏高", trend: "stable", action: "正常关注" },
-];
+const API = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
-const levelColor: Record<string, string> = { HIGH: "#ff4d4f", MEDIUM: "#fa8c16", LOW: "#1890ff" };
-const levelTag: Record<string, string> = { HIGH: "高风险", MEDIUM: "中风险", LOW: "低风险" };
+type RiskLevel = "high" | "medium" | "low";
+
+interface RiskEnterprise {
+  risk_id: number | string;
+  enterprise_id: string;
+  name: string;
+  score: number;
+  level: RiskLevel;
+  reason: string;
+  risk_type?: string | null;
+  source?: string | null;
+  created_at?: string | null;
+  trend: string;
+  action: string;
+}
+
+interface RiskDashboardData {
+  data_available: boolean;
+  is_demo: boolean;
+  disclaimer?: string | null;
+  scenario_id?: string | null;
+  total_enterprises: number;
+  evaluated_enterprises: number;
+  coverage_pct: number;
+  distribution: Record<RiskLevel, number>;
+  enterprises: RiskEnterprise[];
+  summary: string;
+  insights: string[];
+  source: string;
+  generated_at: string;
+}
+
+const levelLabel: Record<RiskLevel, string> = {
+  high: "高风险",
+  medium: "中风险",
+  low: "低风险",
+};
+
+const levelColor: Record<RiskLevel, string> = {
+  high: "red",
+  medium: "orange",
+  low: "blue",
+};
 
 export default function RiskDashboard() {
   const router = useRouter();
-  const [selectedLevel, setSelectedLevel] = useState<string | null>(null);
-  const filteredEnterprises = selectedLevel
-    ? riskEnterprises.filter((enterprise) => enterprise.level === selectedLevel)
-    : riskEnterprises;
+  const { mode, isDemo } = useDataMode();
+  const [data, setData] = useState<RiskDashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [selectedLevel, setSelectedLevel] = useState<RiskLevel | null>(null);
 
-  const selectLevelWithKeyboard = (event: KeyboardEvent, level: string | null) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      setSelectedLevel(level);
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await apiJson<{ success: boolean; data: RiskDashboardData }>(
+        `${API}/dashboard/risk?limit=50&mode=${mode}`,
+      );
+      setData(response.data);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "风险数据加载失败");
+    } finally {
+      setLoading(false);
     }
-  };
+  }, [mode]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  const filteredEnterprises = useMemo(
+    () =>
+      selectedLevel
+        ? (data?.enterprises || []).filter(
+            (enterprise) => enterprise.level === selectedLevel,
+          )
+        : data?.enterprises || [],
+    [data, selectedLevel],
+  );
+
+  const columns: ColumnsType<RiskEnterprise> = [
+    {
+      title: "排名",
+      key: "rank",
+      width: 56,
+      fixed: "left",
+      render: (_value, _record, index) => (
+        <span style={{ color: "#999", fontSize: 12 }}>#{index + 1}</span>
+      ),
+    },
+    {
+      title: "企业名称",
+      dataIndex: "name",
+      key: "name",
+      width: 180,
+      ellipsis: true,
+      render: (name, record) => (
+        isDemo ? (
+          <span>{name}</span>
+        ) : (
+          <Button
+            type="link"
+            style={{ padding: 0 }}
+            onClick={() =>
+              router.push(
+                `/enterprise/${encodeURIComponent(record.enterprise_id)}?returnTo=${encodeURIComponent("/dashboard/risk")}`,
+              )
+            }
+          >
+            {name}
+          </Button>
+        )
+      ),
+    },
+    {
+      title: data?.source === "park_document_evidence" ? "证据风险指标" : "风险评分",
+      dataIndex: "score",
+      key: "score",
+      width: 140,
+      render: (score: number, record) => (
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <Progress
+            percent={score}
+            size="small"
+            strokeColor={
+              record.level === "high"
+                ? "#ff4d4f"
+                : record.level === "medium"
+                  ? "#fa8c16"
+                  : "#1677ff"
+            }
+            style={{ flex: 1, margin: 0 }}
+          />
+          <span style={{ fontSize: 12, fontWeight: 600, minWidth: 36 }}>{score}%</span>
+        </div>
+      ),
+    },
+    {
+      title: "等级",
+      dataIndex: "level",
+      key: "level",
+      width: 80,
+      render: (level: RiskLevel) => (
+        <Tag color={levelColor[level]}>{levelLabel[level] || level}</Tag>
+      ),
+    },
+    {
+      title: "风险原因",
+      dataIndex: "reason",
+      key: "reason",
+      width: 220,
+      ellipsis: { showTitle: false },
+      render: (reason: string) => (
+        <Tooltip title={reason} placement="topLeft">
+          <span>{reason}</span>
+        </Tooltip>
+      ),
+    },
+    {
+      title: "建议行动",
+      dataIndex: "action",
+      key: "action",
+      width: 220,
+      ellipsis: { showTitle: false },
+      render: (action: string) => (
+        <Tooltip title={action} placement="topLeft">
+          <Tag color="blue" style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {action}
+          </Tag>
+        </Tooltip>
+      ),
+    },
+    {
+      title: "更新时间",
+      dataIndex: "created_at",
+      key: "created_at",
+      width: 140,
+      render: (value?: string) => (
+        <span style={{ fontSize: 12, color: "#999", whiteSpace: "nowrap" }}>
+          {value ? new Date(value).toLocaleString("zh-CN") : "—"}
+        </span>
+      ),
+    },
+  ];
+
+  const evaluated = data?.evaluated_enterprises || 0;
+  const distribution = data?.distribution || { high: 0, medium: 0, low: 0 };
+  const progress = (count: number) =>
+    evaluated ? Math.round((count / evaluated) * 100) : 0;
 
   return (
     <div>
       <PageHeader
-        title={<><AlertOutlined style={{ color: "#ff4d4f", marginRight: 8 }} />风险驾驶舱</>}
-        description="点击风险等级筛选企业，进入企业详情后可原路返回"
-        backLabel="返回园区总览"
+        title={<><AlertOutlined style={{ color: "#ff4d4f", marginRight: 8 }} />企业风险监测</>}
+        description={
+          isDemo
+            ? "展示固定合成场景中的风险发现、筛选与人工复核流程"
+            : data?.source === "park_document_evidence"
+              ? "展示园区资料库中可追溯的公开风险证据；指标为事件严重度映射，不是预测分"
+              : "展示 risk 表中每家企业的最新真实评估记录"
+        }
+        backLabel="返回园区运营总览"
         extra={
-          <Button
-            type="primary"
-            icon={<RobotOutlined />}
-            onClick={() => router.push(`/agent/chat?prompt=${encodeURIComponent("分析园区高风险企业并给出处置建议")}`)}
+          <Tooltip
+            title={
+              data?.data_available
+                ? ""
+                : "当前没有可供分析的真实风险评估记录"
+            }
           >
-            AI 深度分析
-          </Button>
+            <span>
+              <Button
+                type="primary"
+                icon={<RobotOutlined />}
+                disabled={!data?.data_available}
+                onClick={() =>
+                  router.push(
+                    `/agent/chat?prompt=${encodeURIComponent("分析园区现有高风险企业并给出处置建议")}`,
+                  )
+                }
+              >
+                AI 深度分析
+              </Button>
+            </span>
+          </Tooltip>
         }
       />
 
-      {/* KPI Row */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col span={6}>
-          <Card hoverable role="button" tabIndex={0} className="interactive-card" onClick={() => setSelectedLevel("HIGH")} onKeyDown={(event) => selectLevelWithKeyboard(event, "HIGH")} style={{ borderColor: selectedLevel === "HIGH" ? "#ff4d4f" : undefined }}>
-            <Statistic title="高风险企业" value={20} valueStyle={{ color: "#ff4d4f" }} prefix={<ExclamationCircleOutlined />} suffix={<RiseOutlined style={{ fontSize: 14, color: "#ff4d4f" }} />} />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card hoverable role="button" tabIndex={0} className="interactive-card" onClick={() => setSelectedLevel("MEDIUM")} onKeyDown={(event) => selectLevelWithKeyboard(event, "MEDIUM")} style={{ borderColor: selectedLevel === "MEDIUM" ? "#fa8c16" : undefined }}>
-            <Statistic title="中风险企业" value={80} valueStyle={{ color: "#fa8c16" }} prefix={<WarningOutlined />} />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card hoverable role="button" tabIndex={0} className="interactive-card" onClick={() => setSelectedLevel("LOW")} onKeyDown={(event) => selectLevelWithKeyboard(event, "LOW")} style={{ borderColor: selectedLevel === "LOW" ? "#52c41a" : undefined }}>
-            <Statistic title="低风险企业" value={500} valueStyle={{ color: "#52c41a" }} prefix={<CheckCircleOutlined />} />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card hoverable role="button" tabIndex={0} className="interactive-card" onClick={() => setSelectedLevel(null)} onKeyDown={(event) => selectLevelWithKeyboard(event, null)} style={{ borderColor: selectedLevel === null ? "#1677ff" : undefined }}>
-            <Statistic title="AI 风险扫描 · 查看全部" value="12,580" suffix="家" valueStyle={{ color: "#1677ff" }} />
-          </Card>
-        </Col>
-      </Row>
-
-      {/* Risk Trend */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col span={12}>
-          <Card title="风险等级分布" size="small">
-            <div style={{ padding: "8px 0" }}>
-              <div style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
-                <Tag color="red">高风险</Tag><Progress percent={Math.round(20/600*100)} size="small" style={{ flex: 1, margin: 0 }} strokeColor="#ff4d4f" /><span style={{ fontSize: 12, color: "#999" }}>20</span>
-              </div>
-              <div style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
-                <Tag color="orange">中风险</Tag><Progress percent={Math.round(80/600*100)} size="small" style={{ flex: 1, margin: 0 }} strokeColor="#fa8c16" /><span style={{ fontSize: 12, color: "#999" }}>80</span>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Tag color="blue">低风险</Tag><Progress percent={Math.round(500/600*100)} size="small" style={{ flex: 1, margin: 0 }} strokeColor="#1890ff" /><span style={{ fontSize: 12, color: "#999" }}>500</span>
-              </div>
-            </div>
-          </Card>
-        </Col>
-        <Col span={12}>
-          <Card title="AI 风险洞察" size="small" style={{ borderLeft: "4px solid #fa8c16" }}>
-            <ul style={{ margin: 0, paddingLeft: 16, fontSize: 13 }}>
-              <li style={{ marginBottom: 6 }}>近 30 天<span style={{ color: "#ff4d4f", fontWeight: 600 }}> 3 家</span>企业风险等级上调</li>
-              <li style={{ marginBottom: 6 }}>机器人产业整体风险<span style={{ color: "#52c41a", fontWeight: 600 }}>低于园区平均</span></li>
-              <li style={{ marginBottom: 6 }}><span style={{ color: "#fa8c16", fontWeight: 600 }}>融资动态</span>是最常见的风险触发因素</li>
-              <li>AI 建议<span style={{ color: "#1677ff", fontWeight: 600 }}>每周扫描</span>一次高风险企业</li>
-            </ul>
-          </Card>
-        </Col>
-      </Row>
-
-      {/* TOP Risk List */}
-      <Card
-        title={<><ExclamationCircleOutlined style={{ color: "#ff4d4f", marginRight: 8 }} />风险企业 TOP 8 · AI 实时监控</>}
-        extra={<><Tag color={selectedLevel ? "blue" : "default"}>{selectedLevel ? `已筛选：${levelTag[selectedLevel]}` : "全部等级"}</Tag><Tag color="green">数据更新: 今日 07:30</Tag></>}
-      >
-        <Table
-          dataSource={filteredEnterprises}
-          size="small"
-          pagination={false}
-          columns={[
-            { title: "排名", dataIndex: "key", key: "key", width: 50, render: (v: string) => <span style={{ fontWeight: 700, color: parseInt(v) <= 3 ? "#ff4d4f" : "#999" }}>#{v}</span> },
-            { title: "企业名称", dataIndex: "name", key: "name", render: (v: string, record) => <Button type="link" style={{ padding: 0, fontWeight: 500 }} onClick={() => router.push(`/enterprise/${record.enterprise_id}?returnTo=${encodeURIComponent("/dashboard/risk")}`)}>{v}</Button> },
-            { title: "风险评分", dataIndex: "score", key: "score", width: 100, render: (v: number) => <Progress percent={v} size="small" strokeColor={v >= 70 ? "#ff4d4f" : v >= 50 ? "#fa8c16" : "#52c41a"} /> },
-            { title: "等级", dataIndex: "level", key: "level", width: 90, render: (v: string) => <Tag color={v === "HIGH" ? "red" : v === "MEDIUM" ? "orange" : "blue"}>{levelTag[v]}</Tag> },
-            { title: "风险原因", dataIndex: "reason", key: "reason", ellipsis: true },
-            { title: "趋势", dataIndex: "trend", key: "trend", width: 70, render: (v: string) => v === "up" ? <RiseOutlined style={{ color: "#ff4d4f" }} /> : v === "down" ? <FallOutlined style={{ color: "#52c41a" }} /> : <span style={{ color: "#999" }}>→</span> },
-            { title: "建议行动", dataIndex: "action", key: "action", width: 130, render: (v: string) => <Tag color="blue">{v}</Tag> },
-            { title: "操作", key: "operation", width: 90, render: (_, record) => <Button size="small" onClick={() => router.push(`/enterprise/${record.enterprise_id}?returnTo=${encodeURIComponent("/dashboard/risk")}`)}>查看详情</Button> },
-          ]}
+      {error && (
+        <Alert
+          type="error"
+          showIcon
+          message="风险数据加载失败"
+          description={error}
+          action={<Button onClick={loadData}>重试</Button>}
+          style={{ marginBottom: 16 }}
         />
-      </Card>
+      )}
+
+      <Spin spinning={loading}>
+        {data && !data.data_available && (
+          <Card
+            size="small"
+            title="风险画像待建立"
+            style={{ marginBottom: 16, borderLeft: "4px solid #1677ff" }}
+          >
+            <p style={{ marginBottom: 6 }}>{data.summary}</p>
+            <span style={{ color: "#666" }}>
+              当前处于公开快照模式，未使用演示企业或虚构风险数量。接入风险评估记录后将自动更新。
+            </span>
+          </Card>
+        )}
+
+        <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+          {(["high", "medium", "low"] as RiskLevel[]).map((level) => (
+            <Col xs={24} md={12} xl={6} key={level}>
+              <Card
+                hoverable={Boolean(data?.data_available)}
+                onClick={() => data?.data_available && setSelectedLevel(level)}
+                style={{
+                  borderColor: selectedLevel === level ? "#1677ff" : undefined,
+                }}
+              >
+                <Statistic
+                  title={`${levelLabel[level]}${isDemo ? "示例企业" : "企业"}`}
+                  value={data?.data_available ? distribution[level] : "—"}
+                  suffix={data?.data_available ? "家" : ""}
+                  valueStyle={{
+                    color:
+                      level === "high"
+                        ? "#ff4d4f"
+                        : level === "medium"
+                          ? "#fa8c16"
+                          : "#52c41a",
+                  }}
+                  prefix={
+                    level === "high" ? (
+                      <ExclamationCircleOutlined />
+                    ) : level === "medium" ? (
+                      <WarningOutlined />
+                    ) : (
+                      <CheckCircleOutlined />
+                    )
+                  }
+                />
+              </Card>
+            </Col>
+          ))}
+          <Col xs={24} md={12} xl={6}>
+            <Card hoverable onClick={() => setSelectedLevel(null)}>
+              <Statistic
+                title="已评估 / 企业总数"
+                value={data?.data_available ? evaluated : "待接入"}
+                suffix={
+                  data?.data_available
+                    ? `/ ${data?.total_enterprises || 0} 家`
+                    : ` / ${data?.total_enterprises || 0} 家企业快照`
+                }
+                valueStyle={{ color: "#1677ff" }}
+              />
+              <Progress
+                percent={data?.coverage_pct || 0}
+                size="small"
+                style={{ marginTop: 8 }}
+              />
+            </Card>
+          </Col>
+        </Row>
+
+        <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+          <Col xs={24} lg={12}>
+            <Card title="风险等级分布" size="small">
+              {(["high", "medium", "low"] as RiskLevel[]).map((level) => (
+                <div
+                  key={level}
+                  style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}
+                >
+                  <Tag color={levelColor[level]}>{levelLabel[level]}</Tag>
+                  <Progress
+                    percent={progress(distribution[level])}
+                    size="small"
+                    style={{ flex: 1, margin: 0 }}
+                  />
+                  <span style={{ width: 48, textAlign: "right" }}>
+                    {data?.data_available ? `${distribution[level]} 家` : "—"}
+                  </span>
+                </div>
+              ))}
+            </Card>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Card title="风险数据说明" size="small" style={{ borderLeft: "4px solid #1677ff" }}>
+              <p>{data?.summary || "正在加载风险数据…"}</p>
+              <ul style={{ marginBottom: 0, paddingLeft: 20 }}>
+                {(data?.insights || []).map((insight) => (
+                  <li key={insight}>{insight}</li>
+                ))}
+              </ul>
+            </Card>
+          </Col>
+        </Row>
+
+        <Card
+          title={<><ExclamationCircleOutlined style={{ color: "#ff4d4f", marginRight: 8 }} />{isDemo ? "演示风险企业记录" : "真实风险企业记录"}</>}
+          extra={
+            <Space>
+              <Tag>{selectedLevel ? `已筛选：${levelLabel[selectedLevel]}` : "全部等级"}</Tag>
+              {data && (
+                <Tag color={isDemo ? "orange" : "green"}>
+                  来源：{data.source === "park_document_evidence" ? "园区资料库公开证据" : data.source}
+                </Tag>
+              )}
+            </Space>
+          }
+        >
+          <Table<RiskEnterprise>
+            rowKey="risk_id"
+            dataSource={filteredEnterprises}
+            columns={columns}
+            size="small"
+            scroll={{ x: 1036 }}
+            pagination={{ pageSize: 10, hideOnSinglePage: true }}
+            locale={{
+              emptyText: (
+                <Empty description={isDemo ? "演示场景暂无记录" : "尚无已入库或已导入的企业风险证据"} />
+              ),
+            }}
+          />
+        </Card>
+      </Spin>
     </div>
   );
 }

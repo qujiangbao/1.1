@@ -1,12 +1,20 @@
-FROM node:22-alpine AS builder
+FROM node:22-slim AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm config set fetch-retries 8 \
+    && npm config set fetch-retry-mintimeout 20000 \
+    && npm config set fetch-retry-maxtimeout 120000 \
+    && npm ci --prefer-offline
 COPY . .
 ARG BACKEND_INTERNAL_URL=http://backend:8000
+ARG CACHE_BUST=0
 ENV BACKEND_INTERNAL_URL=$BACKEND_INTERNAL_URL
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm run build
+# Alpine may fall back to the SWC WASM binding when the native optional
+# package is unavailable. Turbopack requires native SWC, while Webpack works
+# with the WASM fallback and produces the same standalone runtime artifact.
+RUN echo "cache_bust=$CACHE_BUST" && npm run build -- --webpack
 
 FROM node:22-alpine
 WORKDIR /app

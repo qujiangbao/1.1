@@ -1,0 +1,875 @@
+# =============================================================================
+# investment_search_keywords.yaml — 招商线索搜索关键词体系
+# =============================================================================
+# 用途：
+#   1. ExternalDataSource（天眼查/企查查/政府平台）的企业搜索查询模板
+#   2. 自动构建每个产业的"搜索组合"——产业词 + 地域词 + 规模词 + 阶段词
+#   3. 每条搜索查询包含：关键词 AND/OR 组合、搜索范围、权重
+#
+# 搜索平台映射：
+#   tianyancha  — 天眼查 (https://api.tianyancha.com)
+#   qichacha    — 企查查 (https://openapi.qcc.com)
+#   government  — 国家企业信用信息公示系统
+#
+# 约束：
+#   - 不生成虚假企业
+#   - 不预设招商漏斗数据
+#   - 搜索结果需经 data_available 门控
+# =============================================================================
+
+version: "1.0"
+description: "广州八大重点产业招商线索搜索关键词体系"
+date: "2026-07-26"
+target_region: "广州市及粤港澳大湾区"
+
+# ── 通用搜索配置 ────────────────────────────────────────────────────────────
+
+search_config:
+  # 默认地域范围
+  default_regions:
+    primary:
+      - "广州"
+      - "广州市"
+    secondary:
+      - "深圳"
+      - "佛山"
+      - "东莞"
+      - "珠海"
+      - "中山"
+      - "惠州"
+    # 大湾区之外的补充
+    extended:
+      - "北京"
+      - "上海"
+      - "杭州"
+      - "苏州"
+      - "成都"
+      - "武汉"
+      - "合肥"
+
+  # 企业规模过滤 — 按注册资本
+  capital_filters:
+    large:    "注册资本 >= 1亿"      # 大型企业
+    medium:   "5000万 <= 注册资本 < 1亿"  # 中型企业
+    small:    "1000万 <= 注册资本 < 5000万"  # 成长型
+    startup:  "注册资本 < 1000万"     # 初创
+
+  # 企业阶段过滤
+  stage_filters:
+    growth:       "成立 3-10 年，有融资记录"
+    mature:       "成立 10 年以上"
+    early:        "成立 1-3 年"
+    pre_revenue:  "有专利但未量产"
+
+  # 搜索深度
+  max_results_per_query: 20
+  max_queries_per_industry: 10
+
+# ── 产业搜索查询 ────────────────────────────────────────────────────────────
+
+industries:
+
+  # ═══ 1. 人工智能 ═══
+  artificial_intelligence:
+    display_name: "人工智能"
+    # 搜索策略：AI 企业往往注册名中有"智能"/"科技"，需多轮搜索
+    strategy:
+      description: "分三层搜索 — 核心技术企业 → 应用层企业 → 基础设施企业"
+      layers:
+        - name: "核心层"
+          description: "大模型/算法/平台公司"
+        - name: "应用层"
+          description: "AI+行业解决方案公司"
+        - name: "基础设施层"
+          description: "算力/数据/AI芯片公司"
+
+    queries:
+      # ── 核心层 ──
+      - id: "ai-core-1"
+        text: "人工智能 大模型"
+        region_filter: "primary"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "tianyancha"
+        weight: 10
+
+      - id: "ai-core-2"
+        text: "计算机视觉 OR 机器视觉 OR 图像识别"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 9
+
+      - id: "ai-core-3"
+        text: "自然语言处理 OR 语音识别 OR NLP"
+        region_filter: "primary"
+        capital_filter: "small"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "ai-core-4"
+        text: "AI芯片 OR 智能芯片 OR 人工智能芯片 OR NPU OR 神经网络处理器"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 9
+
+      # ── 应用层 ──
+      - id: "ai-app-1"
+        text: "智能驾驶 OR 自动驾驶 OR ADAS"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 8
+        note: "与新能源汽车交叉"
+
+      - id: "ai-app-2"
+        text: "智能制造 机器视觉 OR 智能检测 OR AI质检"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 7
+
+      - id: "ai-app-3"
+        text: "医疗AI OR AI医疗 OR 智能诊断 OR AI制药"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "early"
+        platform_hint: "any"
+        weight: 7
+
+      # ── 基础设施层 ──
+      - id: "ai-infra-1"
+        text: "算力服务 OR GPU算力 OR 智能计算中心"
+        region_filter: "all"
+        capital_filter: "large"
+        stage_filter: "mature"
+        platform_hint: "any"
+        weight: 6
+
+      - id: "ai-infra-2"
+        text: "数据标注 OR 数据标注服务 OR 训练数据"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 5
+
+  # ═══ 2. 机器人 ═══
+  robotics:
+    display_name: "机器人"
+    strategy:
+      description: "本体制造商优先 → 核心零部件 → 系统集成商"
+      layers:
+        - name: "本体层"
+          description: "工业/服务/特种机器人整机制造商"
+        - name: "零部件层"
+          description: "减速器/伺服/控制器/传感器供应商"
+        - name: "集成层"
+          description: "机器人系统集成和解决方案商"
+
+    queries:
+      # ── 本体层 ──
+      - id: "robot-body-1"
+        text: "工业机器人 制造 OR 工业机器人 生产"
+        region_filter: "primary_secondary"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 10
+
+      - id: "robot-body-2"
+        text: "服务机器人 OR 配送机器人 OR 清洁机器人 OR 巡检机器人"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 9
+
+      - id: "robot-body-3"
+        text: "人形机器人 OR 双足机器人 OR 四足机器人"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "early"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "robot-body-4"
+        text: "协作机器人 OR 轻型机器人 OR 柔性机器人"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 8
+
+      # ── 零部件层 ──
+      - id: "robot-part-1"
+        text: "RV减速器 OR 谐波减速器 OR 机器人减速器"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 9
+
+      - id: "robot-part-2"
+        text: "伺服电机 OR 伺服驱动器 OR 驱控一体"
+        region_filter: "primary_secondary"
+        capital_filter: "medium"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "robot-part-3"
+        text: "机器人控制器 OR 运动控制器 OR 运动控制卡"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 8
+
+      # ── 集成层 ──
+      - id: "robot-integ-1"
+        text: "机器人系统集成 OR 自动化产线集成"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "mature"
+        platform_hint: "any"
+        weight: 7
+
+      - id: "robot-integ-2"
+        text: "机器视觉系统 OR 机器人视觉 OR 3D视觉引导"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 7
+
+  # ═══ 3. 智能制造 ═══
+  smart_manufacturing:
+    display_name: "智能制造"
+    strategy:
+      description: "装备制造优先 → 工业软件 → 智能工厂解决方案"
+      layers:
+        - name: "装备层"
+          description: "数控机床/3D打印/激光加工/精密设备"
+        - name: "软件层"
+          description: "MES/PLM/SCADA/工业互联网平台"
+        - name: "方案层"
+          description: "数字化工厂/智能产线总包"
+
+    queries:
+      # ── 装备层 ──
+      - id: "mfg-equip-1"
+        text: "数控机床 OR CNC OR 加工中心"
+        region_filter: "primary_secondary"
+        capital_filter: "medium"
+        stage_filter: "mature"
+        platform_hint: "any"
+        weight: 10
+
+      - id: "mfg-equip-2"
+        text: "3D打印 OR 增材制造设备 OR 金属3D打印"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "mfg-equip-3"
+        text: "激光加工 OR 激光切割 OR 激光焊接 设备"
+        region_filter: "primary_secondary"
+        capital_filter: "medium"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "mfg-equip-4"
+        text: "精密检测 OR 在线检测设备 OR AOI检测"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 7
+
+      # ── 软件层 ──
+      - id: "mfg-sw-1"
+        text: "MES软件 OR 制造执行系统 OR 生产管理系统"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "mfg-sw-2"
+        text: "工业互联网平台 OR 工业云平台 OR 工业APP"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "mfg-sw-3"
+        text: "SCADA OR 数据采集 OR 工业数据采集"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 7
+
+      # ── 方案层 ──
+      - id: "mfg-sol-1"
+        text: "智能工厂 OR 数字化工厂 OR 灯塔工厂"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 7
+
+      - id: "mfg-sol-2"
+        text: "智能仓储 OR 智能物流装备 OR AGV调度"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 7
+
+  # ═══ 4. 新能源汽车 ═══
+  new_energy_vehicle:
+    display_name: "新能源汽车"
+    strategy:
+      description: "整车/三电优先 → 智能网联 → 充电基础设施"
+      layers:
+        - name: "三电层"
+          description: "电池/电机/电控 核心供应商"
+        - name: "智联层"
+          description: "智能座舱/自动驾驶/车联网"
+        - name: "设施层"
+          description: "充电桩/换电站/电池回收"
+
+    queries:
+      # ── 三电层 ──
+      - id: "nev-battery-1"
+        text: "动力电池 制造 OR 锂电池 生产"
+        region_filter: "primary_secondary"
+        capital_filter: "large"
+        stage_filter: "mature"
+        platform_hint: "any"
+        weight: 10
+
+      - id: "nev-battery-2"
+        text: "固态电池 OR 钠离子电池 OR 电池新材料"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "early"
+        platform_hint: "any"
+        weight: 9
+
+      - id: "nev-battery-3"
+        text: "电池管理系统 OR BMS 研发"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "nev-motor-1"
+        text: "驱动电机 OR 永磁同步电机 OR 新能源汽车电机"
+        region_filter: "primary_secondary"
+        capital_filter: "medium"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 9
+
+      - id: "nev-ecu-1"
+        text: "电机控制器 OR 电控系统 OR 车载电源"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 8
+
+      # ── 智联层 ──
+      - id: "nev-smart-1"
+        text: "自动驾驶 OR 智能驾驶 OR 高级辅助驾驶"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "nev-smart-2"
+        text: "激光雷达 OR 毫米波雷达 OR 车载传感器"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "nev-smart-3"
+        text: "智能座舱 OR 车载信息娱乐 OR 座舱域控制器"
+        region_filter: "primary_secondary"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 7
+
+      # ── 设施层 ──
+      - id: "nev-infra-1"
+        text: "充电桩 OR 充电设备 OR 充电站"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 7
+
+      - id: "nev-infra-2"
+        text: "电池回收 OR 梯次利用 OR 动力电池回收"
+        region_filter: "primary_secondary"
+        capital_filter: "medium"
+        stage_filter: "early"
+        platform_hint: "any"
+        weight: 6
+
+  # ═══ 5. 半导体 ═══
+  semiconductor:
+    display_name: "半导体"
+    strategy:
+      description: "设备/材料优先（国产替代关键）→ 制造 → 设计"
+      layers:
+        - name: "设备材料层"
+          description: "半导体设备/关键材料（卡脖子环节）"
+        - name: "制造层"
+          description: "晶圆代工/IDM/封测"
+        - name: "设计层"
+          description: "IC设计/Fabless"
+
+    queries:
+      # ── 设备材料层 ──
+      - id: "semi-equip-1"
+        text: "半导体设备 OR 晶圆设备 OR 芯片设备"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 10
+
+      - id: "semi-mat-1"
+        text: "光刻胶 OR 电子特气 OR 半导体材料"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 9
+
+      - id: "semi-mat-2"
+        text: "硅片 OR 碳化硅衬底 OR 氮化镓衬底 OR 靶材"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 9
+
+      # ── 制造层 ──
+      - id: "semi-fab-1"
+        text: "晶圆制造 OR 晶圆代工 OR Foundry"
+        region_filter: "all"
+        capital_filter: "large"
+        stage_filter: "mature"
+        platform_hint: "any"
+        weight: 9
+
+      - id: "semi-pkg-1"
+        text: "封装测试 OR 先进封装 OR Chiplet封装"
+        region_filter: "primary_secondary"
+        capital_filter: "medium"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 8
+
+      # ── 设计层 ──
+      - id: "semi-design-1"
+        text: "芯片设计 OR IC设计 OR 集成电路设计"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "semi-design-2"
+        text: "EDA软件 OR EDA工具"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 9
+
+  # ═══ 6. 集成电路 ═══
+  integrated_circuit:
+    display_name: "集成电路"
+    strategy:
+      description: "与半导体协同搜索，侧重设计服务和特色工艺"
+      layers:
+        - name: "设计服务层"
+          description: "IC设计服务/IP核/设计平台"
+        - name: "制造服务层"
+          description: "特色工艺/MEMS/化合物半导体"
+        - name: "封测服务层"
+          description: "先进封装/测试服务"
+
+    queries:
+      # ── 设计服务层 ──
+      - id: "ic-design-1"
+        text: "芯片设计服务 OR ASIC设计服务 OR SoC设计"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 9
+
+      - id: "ic-design-2"
+        text: "FPGA开发 OR FPGA设计服务"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "ic-design-3"
+        text: "RISC-V处理器 OR RISC-V芯片"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "early"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "ic-ip-1"
+        text: "IP核 OR 半导体IP OR 芯片IP"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 8
+
+      # ── 制造服务层 ──
+      - id: "ic-mfg-1"
+        text: "MEMS传感器 OR MEMS制造 OR MEMS工艺"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "ic-mfg-2"
+        text: "化合物半导体 OR 氮化镓器件 OR 碳化硅器件"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 9
+
+      # ── 封测服务层 ──
+      - id: "ic-pkg-1"
+        text: "先进封装 OR 3D封装 OR 系统级封装"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "ic-test-1"
+        text: "芯片测试服务 OR 晶圆测试 OR ATE测试"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 7
+
+  # ═══ 7. 生物医药 ═══
+  biomedicine:
+    display_name: "生物医药"
+    strategy:
+      description: "创新药优先 → 高端器械 → CRO/CDMO 服务"
+      layers:
+        - name: "创新药层"
+          description: "抗体/细胞基因治疗/核酸药物/biotech"
+        - name: "器械层"
+          description: "高端影像/植入介入/IVD/手术机器人"
+        - name: "服务层"
+          description: "CRO/CDMO/临床服务"
+
+    queries:
+      # ── 创新药层 ──
+      - id: "bio-drug-1"
+        text: "抗体药物 OR 单克隆抗体 OR ADC药物"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 10
+
+      - id: "bio-drug-2"
+        text: "细胞治疗 OR CAR-T OR 干细胞 OR 基因治疗"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "early"
+        platform_hint: "any"
+        weight: 10
+
+      - id: "bio-drug-3"
+        text: "mRNA OR 小核酸药物 OR 核酸药物"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "early"
+        platform_hint: "any"
+        weight: 9
+
+      - id: "bio-drug-4"
+        text: "生物制药 OR 重组蛋白 OR 疫苗研发"
+        region_filter: "primary_secondary"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 9
+
+      # ── 器械层 ──
+      - id: "bio-dev-1"
+        text: "高端医疗器械 OR 三类医疗器械 OR 植入器械"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 9
+
+      - id: "bio-dev-2"
+        text: "IVD OR 体外诊断试剂 OR POCT OR 分子诊断"
+        region_filter: "primary_secondary"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 9
+
+      - id: "bio-dev-3"
+        text: "医学影像设备 OR CT OR MRI OR 超声 OR 内窥镜"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "any"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "bio-dev-4"
+        text: "手术机器人 OR 骨科手术机器人 OR 介入手术机器人"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "early"
+        platform_hint: "any"
+        weight: 8
+
+      # ── 服务层 ──
+      - id: "bio-svc-1"
+        text: "CRO OR 临床CRO OR 药物研发外包"
+        region_filter: "primary_secondary"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 7
+
+      - id: "bio-svc-2"
+        text: "CDMO OR 生物药CDMO OR 药品生产外包"
+        region_filter: "primary_secondary"
+        capital_filter: "large"
+        stage_filter: "mature"
+        platform_hint: "any"
+        weight: 7
+
+  # ═══ 8. 数字经济 ═══
+  digital_economy:
+    display_name: "数字经济"
+    strategy:
+      description: "平台型企业优先 → 数据要素 → 数字基础设施"
+      layers:
+        - name: "平台层"
+          description: "云服务/SaaS/产业互联网平台"
+        - name: "数据层"
+          description: "大数据/数据交易/数据安全"
+        - name: "设施层"
+          description: "数据中心/算力/网络"
+
+    queries:
+      # ── 平台层 ──
+      - id: "dig-platform-1"
+        text: "SaaS平台 OR 企业级SaaS OR 低代码平台"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 9
+
+      - id: "dig-platform-2"
+        text: "工业互联网平台 OR 产业互联网平台"
+        region_filter: "primary_secondary"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "dig-platform-3"
+        text: "云计算服务 OR 云服务 OR IaaS OR PaaS"
+        region_filter: "all"
+        capital_filter: "large"
+        stage_filter: "mature"
+        platform_hint: "any"
+        weight: 8
+
+      # ── 数据层 ──
+      - id: "dig-data-1"
+        text: "大数据服务 OR 数据中台 OR 数据治理"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "dig-data-2"
+        text: "数据安全 OR 隐私计算 OR 联邦学习"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "dig-data-3"
+        text: "区块链 OR 分布式账本 OR Web3"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "early"
+        platform_hint: "any"
+        weight: 7
+
+      # ── 设施层 ──
+      - id: "dig-infra-1"
+        text: "数据中心 OR IDC OR 算力中心"
+        region_filter: "primary_secondary"
+        capital_filter: "large"
+        stage_filter: "mature"
+        platform_hint: "any"
+        weight: 8
+
+      - id: "dig-infra-2"
+        text: "边缘计算 OR 边缘节点 OR CDN"
+        region_filter: "all"
+        capital_filter: "medium"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 7
+
+      - id: "dig-infra-3"
+        text: "网络安全 OR 信息安全 OR 零信任"
+        region_filter: "all"
+        capital_filter: "small"
+        stage_filter: "growth"
+        platform_hint: "any"
+        weight: 7
+
+# ── 通用补充搜索 ────────────────────────────────────────────────────────────
+
+# 跨产业的高价值目标，不归入单一产业
+cross_industry_queries:
+
+  - id: "cross-patent-heavy"
+    text: "专利数量 >= 50 成立时间 >= 3年"
+    description: "高专利密度的科技企业（不限产业）"
+    region_filter: "primary"
+    capital_filter: "small"
+    platform_hint: "tianyancha"
+    weight: 5
+
+  - id: "cross-funded-recently"
+    text: "融资轮次 A轮 OR B轮 OR Pre-IPO"
+    description: "近期融资活跃的高成长企业"
+    region_filter: "all"
+    capital_filter: "any"
+    stage_filter: "growth"
+    platform_hint: "any"
+    weight: 5
+
+  - id: "cross-high-tech-cert"
+    text: "高新技术企业 OR 专精特新 OR 小巨人"
+    description: "资质标签筛选"
+    region_filter: "primary"
+    capital_filter: "any"
+    stage_filter: "any"
+    platform_hint: "any"
+    weight: 6
+
+  - id: "cross-expansion-signal"
+    text: "新设子公司 OR 产能扩张 OR 新建基地"
+    description: "扩产信号 — 招商线索最直接的目标"
+    region_filter: "primary_secondary"
+    capital_filter: "medium"
+    stage_filter: "mature"
+    platform_hint: "any"
+    weight: 8
+
+# ── 查询结果门控 ────────────────────────────────────────────────────────────
+
+result_gating:
+  description: "搜索结果的质量和来源门控"
+
+  quality_checks:
+    # 每条结果至少满足一个质量条件
+    - check: "has_credit_code"
+      description: "有统一社会信用代码"
+      required: true
+
+    - check: "has_registered_capital"
+      description: "有注册资本数据"
+      required: false
+
+    - check: "has_industry_classification"
+      description: "有行业分类（GB/T 4754）"
+      required: false
+
+  # 来源标记
+  source_tags:
+    tianyancha: "天眼查"
+    qichacha: "企查查"
+    government: "国家企业信用信息公示系统"
+    manual: "人工录入"
+
+  # 数据新鲜度
+  freshness:
+    max_age_days: 90
+    warn_age_days: 60
+    description: "超过 90 天未更新的企业数据应标记为 stale"
+
+# ── 搜索执行配置 ────────────────────────────────────────────────────────────
+
+execution:
+  description: "批量搜索执行的调度配置"
+
+  rate_limits:
+    tianyancha:
+      max_requests_per_minute: 30
+      max_concurrent: 3
+    qichacha:
+      max_requests_per_minute: 20
+      max_concurrent: 2
+    government:
+      max_requests_per_minute: 10
+      max_concurrent: 1
+
+  batch:
+    description: "全量批量搜索的调度"
+    industries_per_batch: 2
+    pause_between_batches_seconds: 60
+    max_runtime_minutes: 30
+
+  dedup:
+    description: "跨查询结果的去重规则"
+    key_fields: ["credit_code", "name", "legal_representative"]
+    method: "credit_code 优先 → 名称模糊匹配 → 法人精确匹配"

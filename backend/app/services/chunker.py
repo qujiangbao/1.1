@@ -16,6 +16,7 @@ from app.services.metadata_extractor import PolicyMetadata
 class ChunkData:
     chunk_id: str
     policy_id: str = ""
+    document_id: int | None = None
     chunk_index: int = 0
     content: str = ""
     content_hash: str = ""

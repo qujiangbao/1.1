@@ -144,7 +144,7 @@ class TestDocker:
 
     def test_docker_files(self):
         root = os.path.join(BACKEND, "..")
-        for f in ["docker-compose.yml", ".env.production", "nginx.conf", "deploy.sh"]:
+        for f in ["docker-compose.yml", ".env.production.example", "nginx.conf", "deploy.sh"]:
             assert os.path.exists(os.path.join(root, f)), f"Missing: {f}"
 
 
@@ -152,8 +152,12 @@ class TestDocs:
     """9. Documentation completeness"""
 
     def test_phase_docs(self):
-        docdir = os.path.join(BACKEND, "..", "docs/engineering")
-        docs_exist = os.path.exists(os.path.join(docdir, "Enterprise_Data_Tool_Implementation_Report_V1.0.md"))
-        # At least one doc present is sufficient (not all may be cherry-picked)
-        assert docs_exist or True, "Doc directory check"
-        assert os.path.exists(os.path.join(BACKEND, "..", "docs/engineering"))
+        docdir = os.path.join(BACKEND, "..", "docs")
+        required_docs = [
+            "ARCHITECTURE.md",
+            "PROJECT_CONTEXT.md",
+            "doc-index.md",
+        ]
+        assert os.path.isdir(docdir), "Missing public docs directory"
+        for filename in required_docs:
+            assert os.path.isfile(os.path.join(docdir, filename)), f"Missing: {filename}"
